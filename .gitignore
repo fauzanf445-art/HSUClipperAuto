@@ -5,3 +5,5 @@ final_output/
 __pycache__/
 .venv/
 *.pyc
+*.exe
+*.log
