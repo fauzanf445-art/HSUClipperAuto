@@ -8,6 +8,7 @@ Contains four classes:
 
 Also provides a simple CLI for common tasks.
 """
+import cmd
 import os
 import re
 import json
@@ -59,7 +60,7 @@ class Summarize:
             raise RuntimeError('google-genai package not available')
         self.client = genai.Client(api_key=self.api_key)
         self.model = model
-        self.out_dir = out_dir or os.path.join(base_dir, 'final_output')
+        self.out_dir = out_dir or os.path.join(base_dir, 'output', 'raw_assets')
         os.makedirs(self.out_dir, exist_ok=True)
 
     @staticmethod
@@ -144,7 +145,8 @@ class DownloadVidio:
         else:
             self.video_id = video_id or 'unknown_video'
         self.raw_dir = os.path.join(self.base_output_dir, 'raw_assets', self.video_id)
-        self.ffmpeg_path = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        local_ffmpeg = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        self.ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
         os.makedirs(self.raw_dir, exist_ok=True)
 
     def download_video_only(self) -> str:
@@ -154,6 +156,7 @@ class DownloadVidio:
             'format': 'bestvideo',
             'outtmpl': output_file,
             'ffmpeg_location': self.ffmpeg_path,
+            'remote_components': True,  
             'noplaylist': True,
             'quiet': False,
             'restrictfilenames': True,
@@ -290,8 +293,8 @@ class ClipVidio:
         self.raw_dir = os.path.join(self.base_output_dir, 'raw_assets', self.video_id)
         self.final_dir = output_dir or os.path.join(self.base_output_dir, 'final_output', self.video_id)
         self.json_path = os.path.join(self.raw_dir, 'transcripts.json')
-        self.srt_path = os.path.join(self.raw_dir, 'subtitles.srt')
-        self.ffmpeg_path = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        local_ffmpeg = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        self.ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'   
         for folder in [self.raw_dir, self.final_dir]:
             os.makedirs(folder, exist_ok=True)
 
@@ -419,7 +422,8 @@ class Caption:
     def __init__(self, base_output_dir: str = None):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.base_output_dir = base_output_dir or os.path.join(base_dir, 'output')
-        self.ffmpeg_path = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        local_ffmpeg = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+        self.ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
 
     @staticmethod
     def _format_timestamp_srt(seconds: float) -> str:
@@ -480,15 +484,35 @@ class Caption:
                     print(' Embedded ->', out.name)
         return True
 
-    def _embed_srt(self, mkv_path: Path, srt_path: Path, overwrite: bool = False):
-        out_path = mkv_path.with_name(mkv_path.stem + '_with_sub.mkv')
-        cmd = [self.ffmpeg_path, '-y' if overwrite else '-n', '-i', str(mkv_path), '-i', str(srt_path), '-c', 'copy', '-c:s', 'srt', str(out_path)]
+    def _embed_srt(self, video_path: Path, srt_path: Path, overwrite: bool = True):
+        temp_output = video_path.parent / f"temp_{video_path.name}"
+
+        cmd = [
+            self.ffmpeg_path, '-y',
+            '-i', str(video_path),
+            '-i', str(srt_path),
+            '-c', 'copy',
+            '-c:s', 'mov_text', # Format subtitle standar untuk MP4/MKV
+            str(temp_output)
+        ]
+
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return out_path
+            subprocess.run(cmd, check=True, capture_output=True)
+            
+            # JIKA BERHASIL: Hapus file video lama dan file SRT
+            if temp_output.exists():
+                video_path.unlink()   # Hapus file asli tanpa subtitle
+                srt_path.unlink()     # Hapus file SRT (karena sudah masuk ke dalam video)
+                
+                # Ganti nama file temp menjadi nama file asli
+                temp_output.rename(video_path) 
+                return video_path
+                
         except subprocess.CalledProcessError as e:
-            logging.error('Embed failed: %s', e.stderr.decode('utf-8', errors='replace'))
-            return None
+                logging.error(f"Gagal embedding: {e}")
+                if temp_output.exists():
+                    temp_output.unlink()
+                return None
 
 
 def _cli():

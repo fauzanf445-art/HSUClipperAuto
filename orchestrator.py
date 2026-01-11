@@ -137,10 +137,12 @@ def workflow_clip(video_id: str, master_video: str = None):
         
         # If no master video provided, try to find it
         if not master_video:
-            master_video = os.path.join(clipper.raw_dir, 'master.mkv')
-            if not os.path.exists(master_video):
-                print(f"❌ Master video not found: {master_video}")
-                return False
+            possible_names = ['master.mkv', 'video_only.mkv', 'master_fixed.mkv']
+            for name in possible_names:
+                temp_path = os.path.join(clipper.raw_dir, name)
+                if os.path.exists(temp_path):
+                    master_video = temp_path
+                    break
         
         print(f"Video ID: {video_id}")
         print(f"Master: {master_video}\n")
