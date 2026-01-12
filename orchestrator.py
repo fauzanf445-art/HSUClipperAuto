@@ -78,6 +78,14 @@ def workflow_download(url: str, video_id: str):
         elif choice == "3":
             print("\n⏳ Downloading video + audio...")
             video, audio, master = downloader.download_both(remux=True)
+                
+            if master and os.path.exists(master):
+                print("⏳ Fixing video codec & metadata...")
+                fixed_master = downloader.fix_video(master)
+                if fixed_master and os.path.exists(fixed_master):
+                    print(f"✅ Video fixed: {fixed_master}")
+                    return fixed_master
+                   
             print(f"✅ Video: {video}")
             print(f"✅ Audio: {audio}")
             print(f"✅ Master (Remuxed): {master}")
@@ -105,7 +113,7 @@ def workflow_summarize(url: str, video_id: str, api_key: str = None):
         print(f"✅ Transcript fetched ({len(transcript)} chars)\n")
         
         print("⏳ Summarizing with Gemini...")
-        summary = summarizer.summarize(transcript)
+        summary = summarizer.summarize(transcript, video_url=url)
         print(f"✅ Summary generated\n")
         
         print("⏳ Saving summary & clips...")
@@ -133,11 +141,10 @@ def workflow_clip(video_id: str, master_video: str = None):
     print_header(f"✂️  STEP 3: CREATE CLIPS")
     
     try:
-        clipper = ClipVidio(video_id=video_id)
-        
+        clipper = ClipVidio(video_id=video_id)        
         # If no master video provided, try to find it
         if not master_video:
-            possible_names = ['master.mkv', 'video_only.mkv', 'master_fixed.mkv']
+            possible_names = ['master_fixed.mkv', 'master.mkv']
             for name in possible_names:
                 temp_path = os.path.join(clipper.raw_dir, name)
                 if os.path.exists(temp_path):
@@ -239,13 +246,10 @@ def full_workflow():
     
     # Input
     url = input("Enter YouTube URL: ").strip()
-    video_id = input("Enter Video ID (or leave empty for auto): ").strip()
-    
+    video_id = Summarize.extract_video_id(url)
     if not video_id:
-        video_id = Summarize.extract_video_id(url)
-        if not video_id:
-            print("❌ Could not extract video ID from URL")
-            return
+        print("❌ Could not extract video ID from URL")
+        return
     
     api_key = input("Enter Gemini API Key (or press Enter to use .env): ").strip()
     

@@ -87,48 +87,76 @@ class Summarize:
                 continue
         raise RuntimeError(f'Failed to fetch transcript. Detail: {last_exc}')
 
-    def summarize(self, transcript_text: str) -> str:
+    def summarize(self, transcript_text: str, video_url: str) -> str:
         prompt = f"""
-        Analyze the following YouTube transcript and produce a strictly formatted JSON summary.
-
-        Requirements:
-        1) Return JSON only — no markdown or extra text.
-        2) Top-level keys: "video_title" and "clips".
-        3) Each item in "clips" must have: "title", "start_time", "end_time", "description".
-        4) Times use HH:MM:SS format.
-
-        Transcript:
+        Analisis vidio YouTube berikut berdasarkan URL dan Transcript untuk mencari momen-momen paling penting, menarik (viral-worthy) dan paling penting ada unsur pembelajaran (edukatif).
+        
+        URL: 
+        {video_url}
+        Transcript: 
         {transcript_text}
+        
+        Tugas Anda:
+        1) Identifikasi momen yang memiliki dampak emosional tinggi, informasi mengejutkan, atau inti dari argumen pembicara.
+        2) Buat "Hook" atau judul klip yang sangat menarik (clicky) namun tetap akurat dalam Bahasa Indonesia.
+        3) Pastikan setiap klip memiliki durasi yang ideal untuk video pendek (sekitar 30-90 detik).
+        4) Hindari bagian basa-basi seperti intro musik atau ajakan subscribe di awal.
+
+        Persyaratan Format JSON:
+        - Key utama: "video_title" dan "clips".
+        - Setiap item dalam "clips" wajib memiliki: "title", "start_time", "end_time", "description".
+        - Format waktu: HH:MM:SS.
 
         Output JSON:
         """.strip()
 
-        response = self.client.models.generate_content(model=self.model, contents=prompt)
-        raw_text = response.text
-        logging.debug('Gemini raw response (first 500 chars): %s', raw_text[:500])
-        return raw_text
+        response = self.client.models.generate_content(
+            model=self.model, 
+            contents=prompt,
+            config={
+                'response_mime_type': 'application/json',
+            }
+        )
+        logging.debug('Gemini raw response (first 500 chars): %s', response.text[:500])
+        return response.text
 
-    def save_summary(self, video_url: str, summary_text: str, prefix: str = 'summary', transcript_text: Optional[str] = None) -> str:
+    def save_summary(self, video_url: str, summary_text: str, prefix: str = 'summary', transcript_text: Optional[str] = None) -> str:     
+        # 1. Ekstrak video ID
         video_id = self.extract_video_id(video_url) or 'unknown'
-        parsed = None
+        
+        clean_json = summary_text.strip()
+        if clean_json.startswith("```"):
+            # Teknik splicing untuk membuang baris pertama (```json) dan terakhir (```)
+            lines = clean_json.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean_json = "\n".join(lines).strip()
+
+        # 2. Parsing String ke Dictionary
         try:
-            parsed = json.loads(summary_text)
-            logging.info('JSON parsed successfully')
-        except Exception:
-            parsed = {'raw': summary_text}
+            parsed = json.loads(clean_json)
+            logging.info(f'Sukses memproses JSON untuk video: {video_id}')
+        except Exception as e:
+            logging.error(f"Gagal parse JSON: {e}")
+            # Jika gagal, simpan apa adanya dalam key 'raw' agar program tidak crash
+            parsed = {'video_title': 'Unknown', 'clips': [], 'raw_error': summary_text}
+
+        # 3. Tentukan Folder Output
         raw_dir = os.path.join(self.out_dir, video_id)
         os.makedirs(raw_dir, exist_ok=True)
+        
+        # 4. Simpan sebagai file instruksi untuk ClipVidio
         clips_path = os.path.join(raw_dir, 'transcripts.json')
-        if isinstance(parsed, dict) and parsed.get('clips'):
-            with open(clips_path, 'w', encoding='utf-8') as cf:
-                json.dump(parsed, cf, ensure_ascii=False, indent=2)
-            logging.info('Clips saved to transcripts.json')
-        else:
-            with open(clips_path, 'w', encoding='utf-8') as cf:
-                json.dump(parsed, cf, ensure_ascii=False, indent=2)
+        with open(clips_path, 'w', encoding='utf-8') as cf:
+            json.dump(parsed, cf, ensure_ascii=False, indent=2)
+            
+        # 5. Simpan transkrip asli (opsional) untuk referensi manual
         if transcript_text:
             with open(os.path.join(raw_dir, 'transcript.txt'), 'w', encoding='utf-8') as tf:
                 tf.write(transcript_text)
+                
         return clips_path
 
 
@@ -140,13 +168,15 @@ class DownloadVidio:
         self.url = url
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.base_output_dir = base_output_dir or os.path.join(base_dir, 'output')
-        if not video_id and "v=" in url:
-            self.video_id = url.split("v=")[1].split("&")[0]
+        if not video_id:
+            self.video_id = Summarize.extract_video_id(url) or 'unknown_video'
         else:
-            self.video_id = video_id or 'unknown_video'
+            self.video_id = video_id
         self.raw_dir = os.path.join(self.base_output_dir, 'raw_assets', self.video_id)
         local_ffmpeg = os.path.join(base_dir, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
         self.ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
+        local_deno = os.path.join(base_dir, 'deno.exe' if os.name == 'nt' else 'deno')
+        self.deno_path = local_deno if os.path.exists(local_deno) else 'deno'
         os.makedirs(self.raw_dir, exist_ok=True)
 
     def download_video_only(self) -> str:
@@ -156,7 +186,14 @@ class DownloadVidio:
             'format': 'bestvideo',
             'outtmpl': output_file,
             'ffmpeg_location': self.ffmpeg_path,
-            'remote_components': True,  
+            'remote_components': True,
+            'remote_components': ['ejs:github', 'ejs:npm'], 
+            'update_remote_components': True,            
+            'js_runtimes': {
+                'deno': {
+                    'path': self.deno_path
+                }
+            },  
             'noplaylist': True,
             'quiet': False,
             'restrictfilenames': True,
@@ -181,6 +218,14 @@ class DownloadVidio:
             'format': 'bestaudio',
             'outtmpl': output_file,
             'ffmpeg_location': self.ffmpeg_path,
+            'remote_components': True,
+            'remote_components': ['ejs:github', 'ejs:npm'], 
+            'update_remote_components': True,            
+            'js_runtimes': {
+                'deno': {
+                    'path': self.deno_path
+                }
+            }, 
             'noplaylist': True,
             'quiet': False,
             'restrictfilenames': True,
@@ -211,6 +256,14 @@ class DownloadVidio:
             'format': 'bestvideo',
             'outtmpl': video_file,
             'ffmpeg_location': self.ffmpeg_path,
+            'remote_components': True,
+            'remote_components': ['ejs:github', 'ejs:npm'], 
+            'update_remote_components': True,            
+            'js_runtimes': {
+                'deno': {
+                    'path': self.deno_path
+                }
+            },
             'noplaylist': True,
             'quiet': False,
             'restrictfilenames': True,
@@ -229,6 +282,14 @@ class DownloadVidio:
             'format': 'bestaudio',
             'outtmpl': audio_file,
             'ffmpeg_location': self.ffmpeg_path,
+            'remote_components': True,
+            'remote_components': ['ejs:github', 'ejs:npm'], 
+            'update_remote_components': True,            
+            'js_runtimes': {
+                'deno': {
+                    'path': self.deno_path
+                }
+            },
             'noplaylist': True,
             'quiet': False,
             'restrictfilenames': True,
@@ -289,7 +350,10 @@ class ClipVidio:
     def __init__(self, base_output_dir: str = None, video_id: str = None, output_dir: str = None):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.base_output_dir = base_output_dir or os.path.join(base_dir, 'output')
-        self.video_id = video_id or 'unknown_video'
+        if not video_id:
+            self.video_id = Summarize.extract_video_id(url) or 'unknown_video'
+        else:
+            self.video_id = video_id
         self.raw_dir = os.path.join(self.base_output_dir, 'raw_assets', self.video_id)
         self.final_dir = output_dir or os.path.join(self.base_output_dir, 'final_output', self.video_id)
         self.json_path = os.path.join(self.raw_dir, 'transcripts.json')
@@ -375,10 +439,10 @@ class ClipVidio:
         master_video = os.path.join(self.raw_dir, 'master.mkv')
         master_fixed = os.path.join(self.raw_dir, 'master_fixed.mkv')
         video_input = None
-        if os.path.exists(master_video):
-            video_input = master_video
-        elif os.path.exists(master_fixed):
+        if os.path.exists(master_fixed):
             video_input = master_fixed
+        elif os.path.exists(master_video):
+            video_input = master_video
         else:
             available_videos = [f for f in os.listdir(self.raw_dir) if f.endswith(('.mkv', '.mp4', '.mov'))]
             if available_videos:
