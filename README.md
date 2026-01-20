@@ -18,12 +18,12 @@ Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
 
 ### Langkah 1: Persiapan Awal
 
-1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.9 atau lebih baru. Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
+1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.12 atau versi stable lebih baru. Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
 
 2.  **Unduh Aset Eksternal:** Aplikasi ini membutuhkan beberapa program dan model. Unduh dan letakkan file-file berikut di dalam folder utama proyek:
     - **FFmpeg & FFprobe:** Unduh dari [sini](https://www.gyan.dev/ffmpeg/builds/) (ambil `ffmpeg-release-full.zip`). Ekstrak dan salin `ffmpeg.exe` dan `ffprobe.exe` dari folder `bin` ke folder utama proyek Anda.
-    - **Deno:** Unduh `deno.exe` dari halaman rilis Deno dan letakkan di folder utama.
-    - **Face Detector Model:** Unduh file `detector.tflite` dari MediaPipe Models dan ganti namanya menjadi `detector.tflite`. Letakkan di folder utama.
+    - **Deno:** Unduh [sini](https://github.com/denoland/deno/releases) dari halaman rilis Deno dan letakkan 'deno.exe' di folder utama.
+    - **Face Detector Model:** Unduh file [sini](https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite) dari MediaPipe Models  dan ganti namanya menjadi `detector.tflite`. Letakkan di folder utama.
 
 3.  **Siapkan Folder Font:** Buat folder bernama `fonts` di direktori utama dan letakkan file font yang Anda inginkan di dalamnya (misalnya `Poppins-Bold.ttf`).
 
@@ -61,6 +61,8 @@ contoh :
 
 
 ### Langkah 4: Jalankan Aplikasi
+
+
 
 Setelah semua persiapan selesai dan virtual environment aktif, jalankan program utama:
 
