@@ -50,11 +50,15 @@ Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
 ### Langkah 3: Konfigurasi Kunci API
 
 1.  Buat file baru di folder utama dan beri nama `.env`.
-2.  Buka file `.env` tersebut dengan Notepad dan isi dengan format berikut, ganti dengan kunci API Anda:
+2.  Buka file `.env` tersebut dengan Notepad dan isi dengan format berikut, ganti dengan kunci API Anda(tidak menggunakan tanda kutip),:
     ```
     GEMINI_API_KEY="ISI_DENGAN_KUNCI_API_GEMINI_ANDA"
     HF_TOKEN="ISI_DENGAN_TOKEN_HUGGINGFACE_ANDA"
     ```
+contoh :
+    GEMINI_API_KEY=ABn89asfiuefjdufij290
+    HF_TOKEN=793j3nkdfasynokokmv769
+
 
 ### Langkah 4: Jalankan Aplikasi
 
