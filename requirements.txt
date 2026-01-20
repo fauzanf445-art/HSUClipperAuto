@@ -1,5 +1,8 @@
+faster-whisper
+google-genai
+mediapipe
+numpy
+opencv-python
+python-dotenv
 youtube-transcript-api
 yt-dlp
-google-genai
-python-dotenv
-openai-whisper

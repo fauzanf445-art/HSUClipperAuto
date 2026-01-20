@@ -1,9 +1,10 @@
 .env
 output/
-raw_asset/
-final_output/
 __pycache__/
 .venv/
 *.pyc
 *.exe
 *.log
+models/
+fonts/
+detector.tflite
