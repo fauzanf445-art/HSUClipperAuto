@@ -61,6 +61,31 @@ contoh :
 
 
 ### Langkah 4: Jalankan Aplikasi
+### Langkah 4: Verifikasi Struktur Folder
+
+Sebelum menjalankan aplikasi, pastikan struktur folder utama Anda terlihat seperti ini. Ini akan memastikan semua aset dan skrip berada di lokasi yang benar.
+
+```
+NAMA_FOLDER_PROYEK/
+├── .venv/
+├── fonts/
+│   └── Poppins-Bold.ttf  (atau font pilihan Anda)
+├── yt_toolkit/
+│   ├── __init__.py
+│   ├── captioner.py
+│   └── ... (file python lainnya)
+├── .env
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── main.py
+├── deno.exe
+├── ffmpeg.exe
+├── ffprobe.exe
+└── detector.tflite
+```
+
+### Langkah 5: Jalankan Aplikasi
 
 Setelah semua persiapan selesai dan virtual environment aktif, jalankan program utama:
 
