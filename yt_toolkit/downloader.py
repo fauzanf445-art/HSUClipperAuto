@@ -100,12 +100,12 @@ class DownloadVidio:
             # Download Video
             with yt_dlp.YoutubeDL(video_opts) as ydl:
                 v_info = ydl.extract_info(self.url, download=True)
-                v_path = v_info.get('filepath')
+                v_path = v_info.get('filepath') or ydl.prepare_filename(v_info)
 
             # Download Audio
             with yt_dlp.YoutubeDL(audio_opts) as ydl:
                 a_info = ydl.extract_info(self.url, download=True)
-                a_path = a_info.get('filepath')
+                a_path = a_info.get('filepath') or ydl.prepare_filename(a_info)
 
             return v_path, a_path
         except Exception as e:
@@ -114,6 +114,10 @@ class DownloadVidio:
 
     def remux_video_audio(self, video_path: str, audio_path: str) -> Optional[str]:
         """Menggabungkan video dan audio ke master.mkv (Stream Copy)."""
+        if not video_path or not audio_path:
+            logging.error("Path video atau audio tidak ditemukan (None). Remux dibatalkan.")
+            return None
+
         output_path = os.path.join(self.raw_dir, 'master.mkv')
         
         if os.path.exists(output_path):

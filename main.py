@@ -120,6 +120,10 @@ def main():
             # download video + audio
             v_path, a_path = downloader.download_both_separate()
             
+            if not v_path or not a_path:
+                print("❌ Gagal mendapatkan file video/audio. Cek koneksi atau URL.")
+                continue
+            
             # Cek apakah file JSON sudah ada (Skip Analisis AI jika resume)
             json_path = os.path.join(downloader.raw_dir, 'transcripts.json')
             
