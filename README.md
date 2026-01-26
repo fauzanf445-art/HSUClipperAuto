@@ -18,7 +18,7 @@ Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
 
 ### Langkah 1: Persiapan Awal
 
-1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.9 atau lebih baru. Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
+1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.10 atau lebih baru (yt-dlp membutuhkan versi ini). Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
 
 2.  **Unduh Aset Eksternal:** Aplikasi ini membutuhkan beberapa program dan model. Unduh dan letakkan file-file berikut di dalam folder utama proyek:
     - **FFmpeg & FFprobe:** Unduh dari [sini](https://www.gyan.dev/ffmpeg/builds/) (ambil `ffmpeg-release-full.zip`). Ekstrak dan salin `ffmpeg.exe` dan `ffprobe.exe` dari folder `bin` ke folder utama proyek Anda.

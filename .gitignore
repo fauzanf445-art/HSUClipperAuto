@@ -1,10 +1,25 @@
-.env
-output/
-__pycache__/
+
 .venv/
+
+# Python Cache (File sampah otomatis Python)
+__pycache__/
 *.pyc
-*.exe
+
+# Environment Variables (SANGAT PENTING: Agar API Key tidak bocor)
+.env
+
+# Folder Output & Log Aplikasi
+output/
 *.log
+debug.log*
+
+# Folder hasil Compile (Nuitka/Exe)
+build/
+dist/
+*.spec
+
+# Aset Besar & Binary (Agar repo tidak berat, user lain harus download sendiri sesuai README)
+bin/
 models/
-fonts/
-detector.tflite
+*.exe
+*.tflite

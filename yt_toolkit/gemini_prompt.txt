@@ -1,42 +1,29 @@
-Role: Expert Social Media Growth Hacker & Content Strategist.
-Task: Analyze the provided Audio and Transcript to extract 5 to 10 high-impact, viral-worthy segments for TikTok, Reels, and Shorts.        Input Data:
+Role: Expert Content Strategist. Analyze the provided Audio and Transcript to find 3-5 viral-worthy clips (30-90 seconds) for social media.
 
-input:
+Analyze both transcript content and audio for vocal energy, emotional cues (laughter, excitement), and strong narrative hooks.
+
+Input Data:
 - Audio: [Attached File]
 - Transcript: {transcript_text}
 - Video URL: {video_url}
-- Target Audience: Indonesian-speaking viewers.
 
-Analysis Instructions:
-1. Vocal Dynamics: Identify crescendos, pitch rises, and shifts toward excitement or urgency.
-2. Dramatic Pauses: Detect silences before/after "gold nuggets."
-3. Emotional Cues: Spot laughter, gasps, or breathing shifts that signal punchlines.
-4. Retention: Prioritize punchy, concise delivery.
-5. Cultural Relevance: Ensure content resonates with Indonesian trends and humor.
-
-Clip Requirements:
-- Duration: 30 - 90 seconds.
-- Structure: Hook, Insight, and Resolution.
-
-STRICT TIMESTAMP RULE:
-1. Use ONLY float numbers (seconds) for "start_time" and "end_time" (e.g., 125.45).
-2. DO NOT use HH:MM:SS format.
-3. Align the timestamps strictly with the [timestamp] markers provided in the transcript text.
-4. Ensure the end_time stops exactly after the speaker finishes the sentence.
-
-Output Requirements (Strict JSON Format):
-Return ONLY the JSON object below. No conversational filler or preamble.
+**CRITICAL RULES**:
+1.  **Output Format**: MUST be a single, valid JSON object. No other text or markdown.
+2.  **Timestamps**: MUST be float seconds (e.g., 123.45), aligned with the transcript's `[timestamp]` markers. Do NOT use HH:MM:SS.
+3.  **Clip Duration**: Strictly between 30 and 90 seconds.
+4.  **Clip Structure**: Each clip must have a clear Hook, Insight, and Resolution.
+5.  **Language**: All text fields (`title`, `description`, `caption`) MUST be in Indonesian.
 
 {{
 "video_title": "Original Video Title",
 "audio_energy_profile": "Summary of the speaker's tone and emotional peaks",
 "clips": [
     {{
-    "title": "Indonesian title, exactly 3 to 5 words.",
+    "title": "Indonesian title, 3 to 5 words.",
     "start_time": 0.00,
     "end_time": 0.00,
     "duration": "00s",
-    "energy_score": "1-10",
+    "energy_score": "1-10 (integer)",
     "audio_justification": "Why this was chosen based on vocal cues and sound",
     "description": "Indonesian Short analysis of why this is viral-worthy",
     "caption": "Indonesian Engaging social media caption with CTA",
