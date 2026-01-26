@@ -21,9 +21,8 @@ Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
 1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.10 atau lebih baru (yt-dlp membutuhkan versi ini). Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
 
 2.  **Unduh Aset Eksternal:** Aplikasi ini membutuhkan beberapa program dan model. Unduh dan letakkan file-file berikut di dalam folder utama proyek:
-    - **FFmpeg & FFprobe:** Unduh dari [sini](https://www.gyan.dev/ffmpeg/builds/) (ambil `ffmpeg-release-full.zip`). Ekstrak dan salin `ffmpeg.exe` dan `ffprobe.exe` dari folder `bin` ke folder utama proyek Anda.
-    - **Deno:** Unduh `deno.exe` dari halaman rilis Deno dan letakkan di folder utama.
-    - **Face Detector Model:** Unduh file `detector.tflite` dari MediaPipe Models dan ganti namanya menjadi `detector.tflite`. Letakkan di folder utama.
+    - **Folder Bin:** Buat folder bernama `bin`. Masukkan `ffmpeg.exe`, `ffprobe.exe`, dan `deno.exe` ke dalamnya.
+    - **Folder Models:** Pastikan folder `models` ada. Masukkan `detector.tflite` ke dalamnya.
 
 3.  **Siapkan Folder Font:** Buat folder bernama `fonts` di direktori utama dan letakkan file font yang Anda inginkan di dalamnya (misalnya `Poppins-Bold.ttf`).
 
@@ -68,6 +67,12 @@ NAMA_FOLDER_PROYEK/
 ├── .venv/
 ├── fonts/
 │   └── Poppins-Bold.ttf  (atau font pilihan Anda)
+├── bin/
+│   ├── deno.exe
+│   ├── ffmpeg.exe
+│   └── ffprobe.exe
+├── models/
+│   └── detector.tflite
 ├── yt_toolkit/
 │   ├── __init__.py
 │   ├── captioner.py
@@ -77,10 +82,6 @@ NAMA_FOLDER_PROYEK/
 ├── README.md
 ├── requirements.txt
 ├── main.py
-├── deno.exe
-├── ffmpeg.exe
-├── ffprobe.exe
-└── detector.tflite
 ```
 
 ### Langkah 5: Jalankan Aplikasi
