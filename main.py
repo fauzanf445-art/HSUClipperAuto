@@ -40,30 +40,11 @@ logging.getLogger("httpx").setLevel(logging.INFO)
 logging.getLogger("huggingface_hub").setLevel(logging.INFO)
 logging.getLogger("absl").setLevel(logging.INFO)
 
-def check_nvenc_support(ffmpeg_path: str) -> bool:
-    """
-    Memeriksa apakah FFmpeg mendukung NVENC dengan melakukan tes encoding nyata.
-    Hanya mengecek daftar encoder tidak cukup karena bisa error saat runtime (masalah driver).
-    """
-    try:
-        # Perintah dummy: encode video hitam 1 detik ke null output
-        # Jika driver bermasalah (cuMemAllocAsync), perintah ini akan error
-        cmd = [
-            ffmpeg_path, '-hide_banner', '-y',
-            '-f', 'lavfi', '-i', 'color=c=black:s=640x360:r=30',
-            '-c:v', 'h264_nvenc', '-preset', 'p4',
-            '-t', '1',
-            '-f', 'null', '-'
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
 def cleanup_on_exit(base_dir: Path):
     """
     Membersihkan cache, log, dan folder output internal project saat keluar.
     File yang sudah disalin ke folder Downloads user tidak akan terhapus.
+    # PENTING: Fungsi ini memastikan tidak ada file sampah yang tertinggal setelah program ditutup.
     """
     print("\n🧹 Membersihkan sistem...", end="", flush=True)
     
@@ -139,6 +120,7 @@ def main():
     DENO_BIN = BIN_DIR / "deno.exe"
     DENO_PATH = str(DENO_BIN) if DENO_BIN.exists() else "deno"
 
+    # --- [LANGKAH 0A] VALIDASI API KEY ---
     # --- LOGIKA API KEY DINAMIS ---
     # Coba load .env dari lokasi BASE_DIR (sebelah exe)
     env_path = BASE_DIR / ".env"
@@ -146,6 +128,7 @@ def main():
 
     api_key = os.getenv('GEMINI_API_KEY')
     
+    # Loop ini akan terus berjalan hingga API key yang valid tersedia.
     while True:
         # 1. Jika API Key ada (dari .env atau input sebelumnya), validasi dulu
         if api_key:
@@ -177,18 +160,15 @@ def main():
         else:
             print(f"❌ API Key yang Anda masukkan salah. Silakan coba lagi.{' '*20}")
 
-    # --- DETEKSI PERANGKAT KERAS ---
-    # 1. Periksa dukungan NVENC untuk encoding video
-    USE_NVENC_FOR_ENCODING = check_nvenc_support(FFMPEG_PATH)
-    if USE_NVENC_FOR_ENCODING:
-        print(f"✅ Menggunakan GPU.")
-    else:
-        print(f"✅ Menggunakan CPU")
+    print(f"✅ FFmpeg & OpenCV dipaksa menggunakan CPU.")
     
+    # --- [LANGKAH 0B] INISIALISASI MODEL AI (WHISPER) ---
     print(f"⏳ Menyiapkan AI Captioner ({WHISPER_MODEL})... ", end="", flush=True)
 
     # --- SISTEM FALLBACK BERTINGKAT (TIERED FALLBACK) ---
     # Strategi: Coba GPU High -> Coba GPU Low (Hemat VRAM) -> Coba CPU
+    # Ini memastikan program tetap berjalan bahkan jika GPU tidak kuat atau tidak ada,
+    # dengan otomatis memilih opsi terbaik yang tersedia.
     fallback_candidates = [
         ("cuda", "float16", "GPU High Precision (Cepat & Akurat)"),
         ("cuda", "int8",    "GPU Low VRAM Mode (Hemat Memori)"),
@@ -196,7 +176,7 @@ def main():
     ]
 
     captioner = None
-    USE_AI_GPU = False # Flag ini KHUSUS untuk AI (Whisper & MediaPipe)
+    USE_AI_GPU = False # Flag ini akan menjadi True jika salah satu mode GPU berhasil.
 
     for device, compute_type, desc in fallback_candidates:
         try:
@@ -210,13 +190,15 @@ def main():
             )
             if device == "cuda":
                 USE_AI_GPU = True
+            logging.info(f"AI Captioner berhasil dimuat menggunakan: {desc}")
             print(f"\r✅ AI menggunakan {desc}.{' ' * 50}", flush=True)
             break # Berhenti looping jika berhasil
-        except Exception:
+        except Exception as e:
+            logging.warning(f"Gagal memuat AI dengan mode '{desc}'. Mencoba mode berikutnya. Error: {e}")
             continue
 
     if captioner is None:
-        print(f"❌ Gagal memuat AI di semua perangkat. Program berhenti.")
+        logging.critical("Gagal memuat AI Captioner di semua perangkat (GPU/CPU). Program berhenti.")
         return
 
     # 🔄 LOOP UTAMA PROGRAM
@@ -270,7 +252,7 @@ def main():
             continue
 
         try:
-            # --- [STEP 1] DOWNLOAD & SUMMARIZE ---
+            # --- [LANGKAH 1] UNDUH ASET & ANALISIS KONTEN ---
             print("\n[Step 1/5] Mengunduh Aset & Menganalisa Video...")
             downloader = DownloadVidio(
                 url=url, 
@@ -278,11 +260,12 @@ def main():
                 ffmpeg_path=FFMPEG_PATH,
                 ffprobe_path=FFPROBE_PATH,
                 deno_path=DENO_PATH,
-                use_gpu=USE_NVENC_FOR_ENCODING, # Gunakan flag NVENC untuk download/remux
+                use_gpu=False, # FFmpeg dipaksa CPU
                 resolution="1080"
             )
             
-            # [OPTIMISASI] Cek folder eksisting untuk skip fetch metadata
+            # --- LOGIKA RESUME ---
+            # Cek apakah folder untuk video ini sudah ada untuk melanjutkan proses sebelumnya.
             video_id = DownloadVidio.extract_video_id(url)
             existing_folder = None
             if video_id and RAW_ASSETS_DIR.exists():
@@ -307,7 +290,7 @@ def main():
             
             v_path, a_path = None, None
 
-            # Cek kelengkapan aset untuk skip download
+            # Jika file master dan JSON sudah ada, lewati proses download dan analisis.
             if master_mkv_path.exists() and json_path.exists():
                  print("⏩ Aset lengkap (Master Video & JSON). Melewati unduhan.")
             else:
@@ -318,7 +301,7 @@ def main():
                     print("❌ Gagal mendapatkan file video/audio. Cek koneksi atau URL.")
                     continue
             
-            # Cek apakah file JSON sudah ada (Skip Analisis AI jika resume)
+            # Jika file JSON sudah ada, lewati analisis Gemini yang memakan waktu dan biaya.
             if json_path.exists():
                 print(f"⏩ [Step 1] File analisis ditemukan: {json_path.name}. Melewati analisis AI.")
             else:
@@ -341,19 +324,19 @@ def main():
             # [CLEANUP] Pesan final Step 1 yang bersih
             print(f"\r✅ [Step 1] Mengunduh aset dan analisa selesai!{' ' * 50}\n", end="", flush=True)
 
-            # --- [STEP 2] REMUXING ---
+            # --- [LANGKAH 2] REMUXING (STANDARISASI VIDEO) ---
             if master_mkv_path.exists():
                 print(f"⏩ [Step 2] File Master ditemukan: {master_mkv_path.name}. Melewati Remux.")
             else:
                 print("[Step 2/5] Menggabungkan Video & Audio (Remux)...")
                 downloader.remux_video_audio(v_path, a_path)
-                print(f"\r✅ [Step 2] Remuxing selesai!{' ' * 50}", end="\n", flush=True)
+                print(f"\r✅ [Step 2] Remuxing selesai!{' ' * 50}\n", end="\n", flush=True)
 
-            # --- [STEP 3] CLIPPING ---
+            # --- [LANGKAH 3] PEMOTONGAN KLIP ---
             print("[Step 3/5] Memotong Klip Mentah (MKV)...")
             # Pastikan kirim string path ke fungsi yang mengharapkan string
             raw_clips = downloader.create_raw_clips(str(json_path))
-            print(f"\r✅ [Step 3] Pemotongan klip selesai!{' ' * 50}", end="\n", flush=True)
+            print(f"\r✅ [Step 3] Pemotongan klip selesai!{' ' * 50}\n", end="\n", flush=True)
             
             if not raw_clips:
                 print("❌ Tidak ada klip yang berhasil dipotong.")
@@ -368,7 +351,7 @@ def main():
             video_final_dir = FINAL_OUTPUT_DIR / downloader.asset_folder_name
             video_final_dir.mkdir(parents=True, exist_ok=True)
 
-            # --- [STEP 4] VISUAL PROCESSING ---
+            # --- [LANGKAH 4] PEMROSESAN VISUAL (REFORMAT KE 9:16) ---
             processed_clips = []
 
             if choice == "1": # Monologue Mode (AI Face Tracking)
@@ -377,7 +360,7 @@ def main():
                 raw_clip_files = sorted(list(Path(input_dir).glob("*.mkv")))
                 
                 # Inisialisasi Processor di luar loop agar model hanya dimuat sekali (Hemat Resource)
-                proc = VideoProcessor(model_path=str(DETECTOR_MODEL_PATH), ffmpeg_path=FFMPEG_PATH, ffprobe_path=FFPROBE_PATH, use_gpu=USE_AI_GPU) # MediaPipe menggunakan flag AI
+                proc = VideoProcessor(model_path=str(DETECTOR_MODEL_PATH), ffmpeg_path=FFMPEG_PATH, ffprobe_path=FFPROBE_PATH, use_gpu=USE_AI_GPU)
                 try:
                     for i, clip_path in enumerate(raw_clip_files):
                         out_name = f"portrait_{clip_path.stem}.mkv"
@@ -394,7 +377,7 @@ def main():
                         processed_clips.append(output_file)
                 finally:
                     proc.close()
-                print(f"\r✅ [Step 4] Proses Portrait selesai!{' ' * 50}", end="\n", flush=True)
+                print(f"\r✅ [Step 4] Proses Portrait selesai!{' ' * 50}\n", end="\n", flush=True)
             
             elif choice == "2": # Podcast Mode
                 print(f"[Step 4/5] Menjalankan Podcast Mode (Smart Static)...")
@@ -416,7 +399,7 @@ def main():
                         processed_clips.append(output_file)
                 finally:
                     proc.close()
-                print(f"\r✅ [Step 4] Proses Podcast selesai!{' ' * 50}", end="\n", flush=True)
+                print(f"\r✅ [Step 4] Proses Podcast selesai!{' ' * 50}\n", end="\n", flush=True)
 
             else: # Choice == 3 (Cinematic Mode)
                 print(f"[Step 4/5] Menjalankan Cinematic Mode (Vlog/Doc)...")
@@ -438,9 +421,9 @@ def main():
                         processed_clips.append(output_file)
                 finally:
                     proc.close()
-                print(f"\r✅ [Step 4] Proses Cinematic selesai!{' ' * 50}", end="\n", flush=True)
+                print(f"\r✅ [Step 4] Proses Cinematic selesai!{' ' * 50}\n", end="\n", flush=True)
 
-            # --- [STEP 5] AI CAPTIONING ---
+            # --- [LANGKAH 5] PENAMBAHAN CAPTION (SUBTITLE) ---
             print(f"[Step 5/5] Menghasilkan Caption dengan {WHISPER_MODEL}...")
             for i, clip in enumerate(processed_clips):
                 # Tentukan nama file akhir (misal: portrait_clip_1_final.mkv)
@@ -455,13 +438,13 @@ def main():
                     video_path=str(clip), 
                     final_path=str(final_output),
                     fonts_dir=str(FONTS_DIR),
-                    use_gpu=USE_NVENC_FOR_ENCODING # Burn-in subtitle menggunakan flag NVENC
+                    use_gpu=False # FFmpeg dipaksa CPU
                 )
 
-            print(f"\r✅ [Step 5] Penambahan caption selesai!{' ' * 50}", end="\n", flush=True)
+            print(f"\r✅ [Step 5] Penambahan caption selesai!{' ' * 50}\n", end="\n", flush=True)
             print(f"\n🎉 SUKSES! Semua file tersedia di: {video_final_dir}")
 
-            # --- [STEP 6] COPY TO DOWNLOADS ---
+            # --- [LANGKAH 6] SALIN HASIL AKHIR ---
             try:
                 print(f"FInishing Step: Menyalin output ke folder Downloads...")
                 downloads_path = Path.home() / "Downloads"
@@ -479,7 +462,8 @@ def main():
                 print(f"⚠️ Gagal menyalin ke Downloads: {e}")
 
         except Exception as e:
-            print(f"\n❌ Terjadi kesalahan pada loop ini: {e}")
+            # Menangkap semua error yang tidak terduga selama proses dan mencatatnya.
+            logging.error(f"Terjadi kesalahan tidak terduga di loop utama: {e}", exc_info=True)
             input("\nTekan Enter untuk kembali ke menu...")
 
 if __name__ == "__main__":

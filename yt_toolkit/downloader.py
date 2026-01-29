@@ -5,6 +5,9 @@ import re
 import subprocess
 from typing import Tuple, Optional, List
 
+# Import utilitas umum
+from .utils import get_duration, run_ffmpeg_with_progress
+
 try:
     import yt_dlp
 except ImportError as e:
@@ -13,15 +16,22 @@ except ImportError as e:
 else:
     _yt_dlp_error = None
 
-# [CLEANUP] Logger kustom untuk membungkam output yt-dlp sepenuhnya
 class QuietLogger:
-    # Log debug masuk ke file log (level DEBUG)
+    """Logger kustom untuk membungkam output standar yt-dlp di konsol,
+    namun tetap mencatatnya ke file log untuk keperluan debugging."""
     def debug(self, msg): logging.debug(f"[yt-dlp] {msg}")
-    # Log warning masuk ke file log (level INFO) agar tidak muncul di terminal (karena terminal filter WARNING)
     def warning(self, msg): logging.info(f"[yt-dlp] {msg}")
     def error(self, msg): logging.error(f"[yt-dlp] {msg}")
 
 class DownloadVidio:
+    """
+    Class untuk menangani semua proses yang berhubungan dengan download dan manipulasi file video.
+    Mencakup:
+    - Mengunduh video dan audio dari URL.
+    - Mengonversi audio untuk AI.
+    - Menggabungkan (remux) video dan audio menjadi file master.
+    - Memotong file master menjadi klip-klip pendek.
+    """
     def __init__(self, url: str, output_dir: str, ffmpeg_path: str, ffprobe_path: str, deno_path: str, use_gpu: bool = True, video_id: Optional[str] = None, resolution: str = "1080"):
         self.url = url
         self.base_output_dir = output_dir
@@ -29,8 +39,8 @@ class DownloadVidio:
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
         self.deno_path = deno_path
-        self.use_gpu = use_gpu
-        self.resolution = str(resolution).lower().replace('p', '')
+        self.use_gpu = False # Dipaksa False (CPU Only) sesuai permintaan
+        self.resolution = str(resolution).lower().replace('p', '') # Normalisasi resolusi
 
         # Properti ini akan diisi oleh setup_directories()
         self.video_title: Optional[str] = None
@@ -54,52 +64,6 @@ class DownloadVidio:
         name = re.sub(r'\s+', ' ', name).strip()
         # Batasi panjangnya agar tidak terlalu panjang untuk path Windows
         return name[:40]
-
-    def _get_duration(self, file_path: str) -> float:
-        """Mendapatkan durasi file media dalam detik untuk perhitungan progres."""
-        cmd = [
-            self.ffprobe_path, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            file_path
-        ]
-        try:
-            return float(subprocess.check_output(cmd).decode('utf-8').strip())
-        except Exception:
-            return 0.0
-
-    def _run_ffmpeg_with_progress(self, cmd: List[str], total_duration: float, task_name: str):
-        """Menjalankan perintah FFmpeg dan menampilkan progress bar."""
-        if total_duration <= 0:
-            # Fallback ke mode senyap jika durasi tidak diketahui
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            return
-
-        # Hapus flag yang berisik
-        cmd = [arg for arg in cmd if arg not in ['-stats']]
-
-        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, universal_newlines=True, encoding='utf-8', errors='ignore')
-
-        stderr_output = []
-        for line in process.stderr:
-            stderr_output.append(line)
-            if 'time=' in line:
-                match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})', line)
-                if match:
-                    hours, minutes, seconds, hundredths = map(int, match.groups())
-                    current_time = hours * 3600 + minutes * 60 + seconds + hundredths / 100
-                    percent = min(100, int((current_time / total_duration) * 100))
-                    bar = '█' * (percent // 2)
-                    spaces = ' ' * (50 - (percent // 2))
-                    print(f"\r{task_name}: [{bar}{spaces}] {percent}%", end='', flush=True)
-
-        process.wait()
-        print('\r', end='', flush=True) # Reset kursor ke awal baris
-        if process.returncode != 0:
-            # Tampilkan 20 baris terakhir dari error log FFmpeg untuk debugging
-            error_log = "".join(stderr_output[-20:])
-            logging.error(f"FFmpeg Error Details:\n{error_log}")
-            raise subprocess.CalledProcessError(process.returncode, cmd)
 
     def _custom_progress_hook(self, d, task_name):
         """Hook kustom untuk menampilkan progress bar yang lebih bersih."""
@@ -258,8 +222,8 @@ class DownloadVidio:
         ]
         
         try:
-            duration = self._get_duration(input_audio_path)
-            self._run_ffmpeg_with_progress(cmd, duration, "Converting Audio for AI")
+            duration = get_duration(input_audio_path, self.ffprobe_path)
+            run_ffmpeg_with_progress(cmd, duration, "Converting Audio for AI")
             return output_path
         except subprocess.CalledProcessError:
             logging.error("Gagal mengonversi audio untuk AI.")
@@ -276,53 +240,34 @@ class DownloadVidio:
         if os.path.exists(output_path):
             logging.info(f"File master sudah ada: {output_path}")
             return output_path
-
-        def run_remux(gpu_mode):
-            # Tentukan parameter encoder berdasarkan mode
-            if gpu_mode:
-                v_codec, preset = 'h264_nvenc', 'p4'
-                # NVENC menggunakan -cq (Constant Quality) atau -qp
-                # Menggunakan -rc constqp agar bitrate menyesuaikan kualitas
-                quality_args = ['-rc', 'constqp', '-qp', '20']
-            else:
-                v_codec, preset = 'libx264', 'ultrafast'
-                # CPU (libx264) menggunakan -crf
-                quality_args = ['-crf', '18']
-            
-            cmd = [
-                self.ffmpeg_path, '-y',
-                '-i', video_path,
-                '-i', audio_path,
-                '-c:v', v_codec,
-                '-preset', preset,
-                *quality_args,          # Unpack argumen kualitas di sini
-                '-r', '30',             # Mengunci frame rate ke 30fps
-                '-g', '30',             # WAJIB: Keyframe tiap 1 detik agar cutting 'copy' akurat
-                '-c:a', 'aac',
-                '-ar', '44100',
-                '-af', 'aresample=async=1:min_comp=0.001:max_soft_comp=0.01',
-                '-map', '0:v:0',
-                '-map', '1:a:0',
-                '-fflags', '+genpts',
-                '-avoid_negative_ts', 'make_zero',
-                output_path
-            ]
-            duration = self._get_duration(video_path)
-            self._run_ffmpeg_with_progress(cmd, duration, "Remuxing")
+        
+        # --- Konfigurasi FFmpeg untuk CPU (libx264) ---
+        # Konfigurasi CPU (libx264)
+        cmd = [
+            self.ffmpeg_path, '-y',
+            '-i', video_path,
+            '-i', audio_path,
+            '-c:v', 'libx264',      # Encoder video CPU yang sangat kompatibel.
+            '-preset', 'ultrafast', # Preset tercepat, karena kualitas diatur oleh CRF.
+            '-crf', '18',           # Constant Rate Factor: Kualitas visual (semakin rendah, semakin bagus). 18 adalah kualitas tinggi.
+            '-r', '30',             # Standarisasi frame rate ke 30fps.
+            '-g', '30',             # WAJIB: Keyframe tiap 1 detik agar cutting 'copy' akurat
+            '-c:a', 'aac',
+            '-ar', '44100',
+            '-af', 'aresample=async=1:min_comp=0.001:max_soft_comp=0.01',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-fflags', '+genpts',
+            '-avoid_negative_ts', 'make_zero',
+            output_path
+        ]
+        duration = get_duration(video_path, self.ffprobe_path)
 
         try:
-            run_remux(self.use_gpu) # Coba dengan GPU
+            run_ffmpeg_with_progress(cmd, duration, "Remuxing (CPU)")
             return self.fix_metadata(output_path)
         except subprocess.CalledProcessError as e:
-            if self.use_gpu:
-                logging.warning(f"⚠️ Remux GPU gagal. Fallback ke CPU... ({e})")
-                try:
-                    run_remux(False)
-                    return self.fix_metadata(output_path)
-                except subprocess.CalledProcessError as cpu_e:
-                    logging.error(f"Remux CPU juga gagal setelah fallback.")
-            # Jika use_gpu False, error akan langsung tertangkap di sini
-            logging.error(f"Gagal remux total. Periksa log FFmpeg di atas untuk detail.")
+            logging.error(f"Gagal remux: {e}")
             return None
 
     def fix_metadata(self, input_path: str) -> Optional[str]:
@@ -381,45 +326,23 @@ class DownloadVidio:
                 created_files.append(output_clip)
                 continue
 
-            def run_clip(gpu_mode):
-                # [FIX SYNC] UBAH DARI COPY KE RE-ENCODE
-                # Stream copy (-c:v copy) menyebabkan desync karena hanya bisa potong di Keyframe.
-                # Re-encode menjamin potongan akurat (frame-perfect).
-                
-                if gpu_mode:
-                    # NVENC (Cepat)
-                    enc_opts = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'constqp', '-qp', '23']
-                else:
-                    # CPU (Kompatibel)
-                    enc_opts = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23']
-
-                cmd = [
-                    self.ffmpeg_path, '-y',
-                    '-ss', str(start_sec), 
-                    '-i', master_path,
-                    '-t', str(duration),
-                    *enc_opts,
-                    '-c:a', 'aac',  # Audio tetap re-encode ringan agar bisa di-fade
-                    '-b:a', '128k',
-                    '-map_metadata', '-1',
-                    output_clip
-                ]
-                self._run_ffmpeg_with_progress(cmd, duration, f"   ⏳ Memotong klip ({i+1}/{len(clips_metadata)})...")
+            # CPU Only (libx264)
+            cmd = [
+                self.ffmpeg_path, '-y',
+                '-ss', str(start_sec), 
+                '-i', master_path,
+                '-t', str(duration),
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', # Re-encode dengan CPU, kualitas baik (23).
+                '-c:a', 'aac',          # Re-encode audio ke AAC standar.
+                '-b:a', '128k',         # Bitrate audio yang cukup untuk klip pendek.
+                '-map_metadata', '-1',  # Hapus semua metadata dari file asli.
+                output_clip
+            ]
 
             try:
-                # Gunakan GPU jika tersedia untuk mempercepat re-encode
-                run_clip(self.use_gpu)
+                run_ffmpeg_with_progress(cmd, duration, f"   ⏳ Memotong klip ({i+1}/{len(clips_metadata)})...")
                 created_files.append(output_clip)
             except subprocess.CalledProcessError:
-                # Fallback ke CPU jika GPU gagal
-                if self.use_gpu:
-                    try:
-                        logging.warning(f"   ⚠️ Gagal potong dengan GPU, mencoba CPU...")
-                        run_clip(False)
-                        created_files.append(output_clip)
-                    except:
-                        logging.error(f"Gagal memotong klip {i+1}.")
-                else:
-                    logging.error(f"Gagal memotong klip {i+1}.")
+                logging.error(f"Gagal memotong klip {i+1}.")
 
         return created_files

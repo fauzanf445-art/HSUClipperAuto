@@ -33,7 +33,9 @@ class Summarize:
             # Mencoba mengambil satu model untuk memverifikasi otentikasi
             next(iter(client.models.list(config={'page_size': 1})), None)
             return True
-        except Exception:
+        except Exception as e:
+            # Log error spesifik untuk debugging di file log, tanpa menampilkannya ke user.
+            logging.error(f"Validasi API Key gagal: {e}")
             return False
 
     def __init__(self, api_key: Optional[str], out_dir: str, ffmpeg_path: str = "ffmpeg", ffprobe_path: str = "ffprobe", model: str = 'gemini-flash-latest'):
@@ -64,49 +66,10 @@ class Summarize:
         except FileNotFoundError:
             raise RuntimeError(f"Prompt file not found at {prompt_path}")
 
-    def _get_duration(self, file_path: str) -> float:
-        """Mendapatkan durasi file media dalam detik untuk perhitungan progres."""
-        cmd = [
-            self.ffprobe_path, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            file_path
-        ]
-        try:
-            return float(subprocess.check_output(cmd).decode('utf-8').strip())
-        except Exception:
-            return 0.0
-
-    def _run_ffmpeg_with_progress(self, cmd: List[str], total_duration: float, task_name: str):
-        """Menjalankan perintah FFmpeg dan menampilkan progress bar."""
-        if total_duration <= 0:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            return
-
-        cmd = [arg for arg in cmd if arg not in ['-stats']]
-
-        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, universal_newlines=True, encoding='utf-8', errors='ignore')
-
-        for line in process.stderr:
-            if 'time=' in line:
-                match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})', line)
-                if match:
-                    hours, minutes, seconds, hundredths = map(int, match.groups())
-                    current_time = hours * 3600 + minutes * 60 + seconds + hundredths / 100
-                    percent = min(100, int((current_time / total_duration) * 100))
-                    bar = '█' * (percent // 2)
-                    spaces = ' ' * (50 - (percent // 2))
-                    print(f"\r{task_name}: [{bar}{spaces}] {percent}%", end='', flush=True)
-
-        process.wait()
-        print('\r', end='', flush=True)
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
-
     def get_transcript(self, video_url: str, prefer_langs=('id', 'en'), audio_path: Optional[str] = None, captioner=None) -> str:
         """Mengambil teks transkrip dari YouTube atau fallback ke manual transcription."""
         
-        # 1. Coba ambil menggunakan yt-dlp (Metode Utama)
+        # --- METODE 1: YT-DLP (Prioritas Utama) ---
         if yt_dlp:
             try:
                 print("⏳ Mengambil transkrip (yt-dlp)...", end='\r', flush=True)
@@ -158,7 +121,8 @@ class Summarize:
             except Exception as e:
                 logging.warning(f"Gagal mengambil transkrip via yt-dlp: {e}")
 
-        # 2. Fallback ke AI Captioner (Whisper) jika yt-dlp gagal atau tidak ada CC
+        # --- METODE 2: FALLBACK KE AI (WHISPER) ---
+        # Jika yt-dlp gagal atau video tidak memiliki subtitle (CC), gunakan Whisper untuk transkripsi manual.
         if audio_path and captioner:
             print("⚠️ Tidak ada CC. Menggunakan Fallback AI (Whisper)...", end='\r', flush=True)
             return captioner.transcribe_for_ai(audio_path)
@@ -185,8 +149,8 @@ class Summarize:
                 print(f"\r⏳ Uploading audio ke Gemini ({attempt + 1}/3)...{' '*20}", end='', flush=True)
                 uploaded = self.client.files.upload(file=path_to_upload)
                 
-                # Tunggu hingga status ACTIVE (Polling)
                 print(f"\r⏳ Memproses audio di server Gemini...{' '*20}", end='', flush=True)
+                # --- POLLING ---: Tunggu hingga server Gemini selesai memproses audio.
                 while uploaded.state.name == "PROCESSING":
                     time.sleep(3)
                     uploaded = self.client.files.get(name=uploaded.name)
@@ -227,7 +191,7 @@ class Summarize:
     def save_summary(self, video_url: str, summary_text: str, transcript_text: Optional[str] = None, target_dir: str = None) -> str:
         """Menyimpan hasil summary ke file transcripts.json."""
         
-        # Membersihkan format markdown jika AI memberikan ```json ... ```
+        # Membersihkan format markdown jika AI secara keliru membungkus output JSON dengan ```json ... ```
         clean_json = summary_text.strip()
         if clean_json.startswith("```"):
             lines = clean_json.splitlines()

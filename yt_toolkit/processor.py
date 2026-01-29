@@ -13,6 +13,9 @@ from typing import List
 from collections import deque
 from contextlib import contextmanager
 
+# Import utilitas umum
+from .utils import get_duration, run_ffmpeg_with_progress
+
 @contextmanager
 def suppress_stderr():
     """
@@ -41,6 +44,13 @@ def suppress_stderr():
         yield
 
 class VideoProcessor:
+    """
+    Class untuk memproses visual video.
+    - Mengubah format landscape ke portrait (9:16).
+    - Menerapkan tracking wajah (Monologue Mode).
+    - Menerapkan smart static camera (Podcast Mode).
+    - Menerapkan efek blur background (Cinematic Mode).
+    """
     def __init__(self, model_path='detector.tflite', ffmpeg_path='ffmpeg', ffprobe_path='ffprobe', use_gpu=False):
         """
         Inisialisasi Face Tracker menggunakan MediaPipe Tasks API.
@@ -55,71 +65,81 @@ class VideoProcessor:
         self.ffprobe_path = ffprobe_path
         self.use_gpu = use_gpu
         self.detector = None
-        
-        # Variabel untuk Smoothing
-        self.smooth_factor = 0.05
-        self.prev_centers = {} # Menyimpan posisi X terakhir untuk tiap indeks wajah
-        
-        # Buffer untuk mencegah flickering mode (Hysteresis)
-        self.mode_history = []
-        self.buffer_size = 45 # jumlah frame untuk validasi perpindahan mode
+
+        # --- KONFIGURASI ALGORITMA ---
+        # Konfigurasi Umum
+        self.LOOKAHEAD_RANGE = 6  # Jumlah frame masa depan yang diintip untuk pergerakan cerdas.
+        self.SCENE_CUT_THRESHOLD_PX = 300  # Jarak perpindahan wajah (pixel) untuk dianggap scene cut.
+
+        # Konfigurasi Monologue Mode (Face Tracking)
+        self.SMOOTHING_BASE_FACTOR = 0.02  # Faktor kehalusan dasar (kamera lambat).
+        self.SMOOTHING_BOOST_FACTOR = 0.15 # Faktor kehalusan tambahan saat subjek bergerak cepat.
+        self.SMOOTHING_MAX_DIFF = 200.0    # Jarak maksimal untuk menghitung boost.
+        self.MODE_BUFFER_SIZE = 45         # Jumlah frame untuk validasi perpindahan mode (1.5 detik @ 30fps).
+        self.MODE_SWITCH_THRESHOLD = 0.9   # 90% frame di buffer harus konsisten untuk ganti mode.
+
+        # Konfigurasi Podcast Mode (Smart Static)
+        self.PODCAST_STABILITY_THRESHOLD = 20      # Jumlah frame subjek harus stabil sebelum kamera 'cut'.
+        self.PODCAST_MOVEMENT_DEADZONE_RATIO = 0.20 # 20% dari lebar layar, gerakan di bawah ini diabaikan.
+        self.PODCAST_SPLIT_ZOOM_FACTOR = 0.6       # Faktor zoom untuk mode split screen 2 orang.
+
+        # Konfigurasi Cinematic Mode
+        self.CINEMATIC_CROP_MARGIN = 0.15 # 15% crop dari setiap sisi untuk efek zoom.
+
+        # --- Variabel State (direset per video) ---
+        # Menyimpan posisi X terakhir untuk setiap ID wajah agar pergerakan kamera mulus.
+        self.prev_centers = {} 
+        # Buffer untuk logika 'Hysteresis' (mencegah kamera 'flickering' antar mode).
+        self.mode_history = [] 
         self.current_mode = 1 # Mode aktif saat ini (1: Single, 2: Split)
-
-    def _get_duration(self, file_path: str) -> float:
-        """Mendapatkan durasi file media dalam detik untuk perhitungan progres."""
-        cmd = [
-            self.ffprobe_path, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            file_path
-        ]
-        try:
-            return float(subprocess.check_output(cmd).decode('utf-8').strip())
-        except Exception:
-            return 0.0
-
-    def _run_ffmpeg_with_progress(self, cmd: List[str], total_duration: float, task_name: str):
-        """Menjalankan perintah FFmpeg dan menampilkan progress bar."""
-        if total_duration <= 0:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            return
-
-        cmd = [arg for arg in cmd if arg not in ['-stats']]
-
-        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, universal_newlines=True, encoding='utf-8', errors='ignore')
-
-        for line in process.stderr:
-            if 'time=' in line:
-                match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})', line)
-                if match:
-                    hours, minutes, seconds, hundredths = map(int, match.groups())
-                    current_time = hours * 3600 + minutes * 60 + seconds + hundredths / 100
-                    percent = min(100, int((current_time / total_duration) * 100))
-                    bar = '█' * (percent // 2)
-                    spaces = ' ' * (50 - (percent // 2))
-                    print(f"\r{task_name}: [{bar}{spaces}] {percent}%", end='', flush=True)
-
-        process.wait()
-        print('\r', end='', flush=True)
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
     
+    def _initialize_detector(self):
+        """
+        Menginisialisasi detector MediaPipe dengan fallback otomatis dari GPU ke CPU.
+        Ini mencegah duplikasi kode di setiap fungsi proses.
+        """
+        # 1. Coba inisialisasi dengan GPU jika diminta oleh pengguna.
+        if self.use_gpu:
+            try:
+                logging.info("Mencoba inisialisasi MediaPipe dengan delegasi GPU...")
+                options = vision.FaceDetectorOptions(
+                    base_options=python.BaseOptions(model_asset_path=self.model_path, delegate=python.BaseOptions.Delegate.GPU),
+                    running_mode=vision.RunningMode.VIDEO,
+                    min_detection_confidence=0.6
+                )
+                with suppress_stderr(): # Sembunyikan log C++ yang 'berisik' dari TensorFlow.
+                    self.detector = vision.FaceDetector.create_from_options(options)
+                logging.info("✅ MediaPipe berhasil dimuat di GPU.")
+                return # Berhasil, keluar dari fungsi.
+            except Exception as e:
+                logging.warning(f"⚠️ Inisialisasi MediaPipe GPU gagal, beralih ke CPU. Error: {e}")
+                self.detector = None # Pastikan detector direset jika GPU gagal.
+
+        # 2. Jika GPU tidak diminta atau gagal, gunakan CPU sebagai fallback.
+        logging.info("Menginisialisasi MediaPipe dengan delegasi CPU...")
+        options = vision.FaceDetectorOptions(
+            base_options=python.BaseOptions(model_asset_path=self.model_path, delegate=python.BaseOptions.Delegate.CPU),
+            running_mode=vision.RunningMode.VIDEO,
+            min_detection_confidence=0.6
+        )
+        with suppress_stderr():
+            self.detector = vision.FaceDetector.create_from_options(options)
+        logging.info("✅ MediaPipe berhasil dimuat di CPU.")
+
     def _get_smooth_x(self, face_id, target_x):
-        """Menghitung posisi X yang halus menggunakan LERP Adaptif (Dynamic Smoothing)."""
+        """Menghitung posisi X yang halus menggunakan LERP Adaptif (Dynamic Smoothing).
+        - Jika target bergerak jauh, kamera merespons lebih cepat.
+        - Jika target bergerak sedikit, kamera merespons lebih lambat (efek sinematik).
+        """
         if face_id not in self.prev_centers:
             self.prev_centers[face_id] = target_x
             return target_x
             
         prev_x = self.prev_centers[face_id]
         diff = abs(target_x - prev_x)
-        
-        # LOGIKA DINAMIS:
-        # - Jarak Jauh (>100px): Responsif (factor ~0.15) agar tidak tertinggal.
-        # - Jarak Dekat (<20px): Sangat lambat (factor ~0.02) agar stabil/cinematic.
-        
-        # Normalisasi diff menjadi speed boost (max boost 0.15)
-        speed_boost = min(diff, 200) / 200.0 * 0.15
-        current_factor = 0.02 + speed_boost 
+
+        speed_boost = min(diff, self.SMOOTHING_MAX_DIFF) / self.SMOOTHING_MAX_DIFF * self.SMOOTHING_BOOST_FACTOR
+        current_factor = self.SMOOTHING_BASE_FACTOR + speed_boost 
         
         self.prev_centers[face_id] = int((1 - current_factor) * prev_x + current_factor * target_x)
         return self.prev_centers[face_id]
@@ -127,15 +147,15 @@ class VideoProcessor:
     def _determine_mode(self, num_faces):
         """
         Menentukan mode tampilan (Single vs Split) dengan Sticky Logic.
-        Hanya berpindah mode jika buffer sangat konsisten (mengurangi flickering).
+        Hanya berpindah mode jika deteksi konsisten selama beberapa frame untuk mengurangi 'flickering'.
         """
         detected_mode = 2 if num_faces != 1 else 1
         self.mode_history.append(detected_mode)
-        if len(self.mode_history) > self.buffer_size:
+        if len(self.mode_history) > self.MODE_BUFFER_SIZE:
             self.mode_history.pop(0)
         
         # Ambang batas stabilitas (misal 90% dari buffer harus konsisten untuk pindah)
-        threshold = int(self.buffer_size * 0.9)
+        threshold = int(self.MODE_BUFFER_SIZE * self.MODE_SWITCH_THRESHOLD)
         
         if self.current_mode == 1:
             # Jika sedang Single, butuh bukti kuat untuk pindah ke Split
@@ -171,19 +191,12 @@ class VideoProcessor:
         self.current_mode = 1  # Reset mode ke default
         frame_count = 0 
 
-        # Inisialisasi Detector BARU untuk setiap video (Reset Timestamp)
-        delegate = python.BaseOptions.Delegate.GPU if self.use_gpu else python.BaseOptions.Delegate.CPU
-        options = vision.FaceDetectorOptions(
-            base_options=python.BaseOptions(model_asset_path=self.model_path, delegate=delegate),
-            running_mode=vision.RunningMode.VIDEO,
-            min_detection_confidence=0.6  # Naikkan ke 0.6 untuk mengurangi false positive (objek background)
-        )
-        with suppress_stderr():
-            self.detector = vision.FaceDetector.create_from_options(options)
+        # Panggil helper untuk inisialisasi detector dengan fallback GPU->CPU.
+        self._initialize_detector()
 
         try:
             # --- LOOK-AHEAD SETUP ---
-            lookahead_range = 6  # Jumlah frame masa depan yang diintip untuk smoothing
+            lookahead_range = self.LOOKAHEAD_RANGE
             frame_buffer = deque() # Buffer untuk menyimpan {frame, faces_x, mode}
             last_face_x = None # Untuk mendeteksi Scene Cut (Perpindahan drastis)
 
@@ -207,11 +220,12 @@ class VideoProcessor:
                             faces_x.append(int(bbox.origin_x + (bbox.width / 2)))
                         faces_x.sort()
 
-                    # [SCENE CUT DETECTION]
-                    # Jika posisi wajah lompat > 300px (ganti shot), reset buffer agar tidak blending
+                    # --- DETEKSI SCENE CUT ---
+                    # Jika posisi wajah utama melompat drastis (>300px), kemungkinan terjadi pergantian shot.
+                    # Reset buffer dan smoothing untuk mencegah 'blending' antar shot yang berbeda.
                     current_face_x = faces_x[0] if faces_x else None
                     if last_face_x is not None and current_face_x is not None:
-                        if abs(current_face_x - last_face_x) > 300:
+                        if abs(current_face_x - last_face_x) > self.SCENE_CUT_THRESHOLD_PX:
                             frame_buffer.clear()
                             self.prev_centers = {} # Reset smoothing state
                     
@@ -239,7 +253,7 @@ class VideoProcessor:
                     curr_mode = data['mode']
                     
                     if curr_mode == 2:
-                    # --- MODE STATIS (ZOOM + BLUR BG) ---
+                    # --- MODE 2: CINEMATIC (ZOOM + BLUR BACKGROUND) ---
                     
                     # 1. Buat Background Blur (Optimized)
                     # Ambil bagian tengah frame selebar target_w untuk background
@@ -255,7 +269,7 @@ class VideoProcessor:
 
                     # 2. Siapkan Foreground (Video Utama)
                     # Potong 15% kiri dan kanan (Zoom) agar video lebih memenuhi layar
-                        crop_margin = 0.15 
+                        crop_margin = self.CINEMATIC_CROP_MARGIN 
                         x_start = int(w * crop_margin)
                         x_end = int(w * (1 - crop_margin))
                         fg_crop = curr_frame[:, x_start:x_end]
@@ -273,9 +287,10 @@ class VideoProcessor:
                         else:
                             final_frame[y_offset : y_offset + fg_h_new, :] = foreground
                     else:
-                    # --- MODE SINGLE FACE TRACKING ---
-                        # [LOOK-AHEAD LOGIC]
-                        # Hitung rata-rata posisi wajah dari frame sekarang + frame masa depan di buffer
+                    # --- MODE 1: SINGLE FACE TRACKING (MONOLOGUE) ---
+                        # --- LOGIKA LOOK-AHEAD ---
+                        # Untuk membuat pergerakan kamera lebih 'cerdas' dan tidak reaktif,
+                        # kita 'mengintip' posisi wajah di beberapa frame berikutnya (dari buffer).
                         future_xs = []
                         
                         # Masukkan posisi wajah frame saat ini (jika ada)
@@ -287,9 +302,9 @@ class VideoProcessor:
                                 future_xs.append(item['faces_x'][0])
                         
                         if future_xs:
-                            # Target adalah rata-rata posisi (Low-pass filter non-kausal)
+                            # Target kamera adalah RATA-RATA dari posisi wajah sekarang dan di masa depan.
                             avg_target = int(sum(future_xs) / len(future_xs))
-                            # Gabungkan dengan smoothing LERP (Inersia) untuk hasil ultra-halus
+                            # Hasil rata-rata ini kemudian dihaluskan lagi dengan LERP untuk inersia.
                             smooth_x = self._get_smooth_x('left', avg_target)
                         else:
                             # Fallback jika tidak ada wajah sama sekali di buffer
@@ -342,8 +357,8 @@ class VideoProcessor:
         out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w_out, h_out))
 
         # 2. Hitung dimensi crop dan scale (lakukan sekali saja)
-        # Potong 15% dari setiap sisi (Zoom lebih besar)
-        crop_margin = 0.15
+        # Potong sesuai margin yang ditentukan
+        crop_margin = self.CINEMATIC_CROP_MARGIN
         crop_x_start = int(w_in * crop_margin)
         crop_x_end = int(w_in * (1 - crop_margin))
         cropped_w = crop_x_end - crop_x_start
@@ -408,31 +423,23 @@ class VideoProcessor:
         
         out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (target_w, h))
 
-        # Setup Detector
-        delegate = python.BaseOptions.Delegate.GPU if self.use_gpu else python.BaseOptions.Delegate.CPU
-        options = vision.FaceDetectorOptions(
-            base_options=python.BaseOptions(model_asset_path=self.model_path, delegate=delegate),
-            running_mode=vision.RunningMode.VIDEO,
-            min_detection_confidence=0.6
-        )
-        with suppress_stderr():
-            self.detector = vision.FaceDetector.create_from_options(options)
+        # Panggil helper untuk inisialisasi detector dengan fallback GPU->CPU.
+        self._initialize_detector()
 
         # --- STATE VARIABLES ---
         
         # 1. Mode Switching (Hysteresis)
-        active_mode = 1 # 1: Single, 2: Split
-        mode_buffer = deque(maxlen=45) # Buffer 1.5 detik (30fps) untuk stabilitas mode
+        active_mode = 1  # 1: Single, 2: Split
+        mode_buffer = deque(maxlen=self.MODE_BUFFER_SIZE)
         
-        # 2. Single Mode (Smart Static)
+        # 2. State untuk Single Mode (Smart Static)
         current_camera_x = w // 2  # Posisi awal kamera (tengah)
         stability_counter = 0      
-        STABILITY_THRESHOLD = 20   # Naikkan ke 20 frame agar tidak mudah trigger cut
-        MOVEMENT_DEADZONE = w * 0.20 # Naikkan ke 20% agar toleransi gerakan kecil lebih besar
+        movement_deadzone_px = w * self.PODCAST_MOVEMENT_DEADZONE_RATIO
 
         # 3. Split Mode (Layout & Smoothing)
         self.prev_centers = {} # Reset smoothing state
-        zoom_factor = 0.6
+        zoom_factor = self.PODCAST_SPLIT_ZOOM_FACTOR
         split_crop_h = int(h * zoom_factor)
         split_crop_w = int(split_crop_h * (target_w / (h // 2)))
         split_y_start = (h - split_crop_h) // 2
@@ -442,7 +449,7 @@ class VideoProcessor:
 
         try:
             # [LOOK-AHEAD SETUP]
-            lookahead_range = 6
+            lookahead_range = self.LOOKAHEAD_RANGE
             frame_buffer = deque()
 
             while True:
@@ -468,9 +475,9 @@ class VideoProcessor:
                     mode_buffer.append(detected_mode)
                     
                     # Cek konsistensi buffer (90% harus sama untuk pindah mode)
-                    if mode_buffer.count(2) > int(len(mode_buffer) * 0.9):
+                    if mode_buffer.count(2) > int(len(mode_buffer) * self.MODE_SWITCH_THRESHOLD):
                         active_mode = 2
-                    elif mode_buffer.count(1) > int(len(mode_buffer) * 0.9):
+                    elif mode_buffer.count(1) > int(len(mode_buffer) * self.MODE_SWITCH_THRESHOLD):
                         active_mode = 1
                     
                     # Simpan ke buffer
@@ -489,7 +496,7 @@ class VideoProcessor:
                     curr_mode = data['active_mode']
 
                     if curr_mode == 2:
-                        # --- SPLIT MODE (SMOOTHED + LOOK-AHEAD) ---
+                        # --- MODE 2: SPLIT SCREEN (PODCAST 2 ORANG) ---
                         # Hitung rata-rata posisi wajah masa depan untuk stabilitas maksimal
                         future_lefts = []
                         future_rights = []
@@ -533,7 +540,7 @@ class VideoProcessor:
                         final_frame = np.vstack((top_half, bottom_half))
                         stability_counter = 0
                     else:
-                        # --- SINGLE MODE (SMART STATIC CUT + LOOK-AHEAD) ---
+                        # --- MODE 1: SMART STATIC CUT (PODCAST 1 ORANG) ---
                         # Hitung rata-rata posisi wajah masa depan untuk keputusan Cut yang akurat
                         future_targets = []
                         if curr_faces: future_targets.append(curr_faces[0])
@@ -547,17 +554,17 @@ class VideoProcessor:
                         else:
                             target_x = current_camera_x
 
-                        # --- LOGIKA SMART STATIC (DEADZONE) ---
+                        # --- LOGIKA SMART STATIC CUT DENGAN DEADZONE ---
                         # Hitung jarak antara posisi kamera saat ini dengan target wajah
                         diff = abs(target_x - current_camera_x)
 
-                        # Jika wajah keluar dari deadzone (berpindah jauh), mulai hitung stabilitas
-                        if diff > MOVEMENT_DEADZONE:
+                        # Jika wajah keluar dari 'deadzone' (berpindah cukup jauh), mulai hitung stabilitas.
+                        if diff > movement_deadzone_px:
                             stability_counter += 1
-                            # Jika posisi baru konsisten selama sekian frame, lakukan CUT (pindah kamera)
-                            if stability_counter > STABILITY_THRESHOLD:
+                            # Jika posisi baru konsisten selama >THRESHOLD frame, lakukan 'CUT' (pindah kamera).
+                            if stability_counter > self.PODCAST_STABILITY_THRESHOLD:
                                 current_camera_x = target_x
-                                stability_counter = 0
+                                stability_counter = 0 # Reset counter setelah cut.
                         else:
                             # Jika wajah masih dalam deadzone, reset counter (kamera tetap diam)
                             stability_counter = 0
@@ -585,7 +592,7 @@ class VideoProcessor:
         v_path = str(Path(video_visual_path).resolve())
         a_path = str(Path(audio_source_path).resolve())
         o_path = str(Path(final_output_path).resolve())
-
+        
         # Pastikan folder output sudah ada
         os.makedirs(os.path.dirname(o_path), exist_ok=True)
         # Kita gunakan perintah FFmpeg: ambil video dari visual_path, ambil audio dari audio_source
@@ -602,11 +609,12 @@ class VideoProcessor:
             o_path
         ]
         try:
-            duration = self._get_duration(v_path)
-            self._run_ffmpeg_with_progress(cmd, duration, "   🎵 Menggabungkan audio...")
+            duration = get_duration(v_path, self.ffprobe_path)
+            run_ffmpeg_with_progress(cmd, duration, "   🎵 Menggabungkan audio...")
             # Hapus file sementara yang tanpa suara jika berhasil
             if os.path.exists(v_path):
-                os.remove(v_path)
+                try: os.remove(v_path)
+                except OSError as e: logging.warning(f"Gagal menghapus file video sementara: {e}")
             return True
         except Exception as e:
             print(f"❌ Gagal menggabungkan audio: {e}")
