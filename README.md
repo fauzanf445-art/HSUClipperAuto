@@ -24,11 +24,9 @@ Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
 
 1.  **Instal Python:** Pastikan Anda memiliki Python versi 3.10 atau lebih baru (yt-dlp membutuhkan versi ini). Anda bisa mengunduhnya dari [python.org](https://www.python.org/downloads/). Saat instalasi, **centang kotak "Add Python to PATH"**.
 
-2.  **Unduh Aset Eksternal:** Aplikasi ini membutuhkan beberapa program dan model. Unduh dan letakkan file-file berikut di dalam folder utama proyek:
-    - **Folder Bin:** Buat folder bernama `bin`. Masukkan `ffmpeg.exe`, `ffprobe.exe`, dan `deno.exe` ke dalamnya.
-    - **Folder Models:** Pastikan folder `models` ada. Masukkan `detector.tflite` ke dalamnya.
-
-3.  **Siapkan Folder Font:** Buat folder bernama `fonts` di direktori utama dan letakkan file font yang Anda inginkan di dalamnya (misalnya `Poppins-Bold.ttf`).
+2.  **Unduh Aset Pendukung:** Aplikasi ini membutuhkan beberapa file eksternal (FFmpeg, Model AI, Font).
+    - Unduh semua aset dari link berikut: [Google Drive Aset](https://drive.google.com/drive/folders/1YacD0axuUOPOezJPiA8EuDnpwk7ZixNs?usp=sharing)
+    - Ekstrak isinya dan letakkan folder `bin`, `models`, dan `fonts` langsung di dalam folder utama proyek ini.
 
 ### Langkah 2: Instalasi Dependensi
 
@@ -109,3 +107,24 @@ python main.py
 ```
 
 Aplikasi akan berjalan dan menampilkan menu utama di terminal Anda.
+
+---
+
+## Credits & Teknologi yang Digunakan
+
+Proyek ini dapat terwujud berkat kerja keras komunitas open-source. Berikut adalah daftar teknologi dan library utama yang menjadi tulang punggung aplikasi ini:
+
+- **Core AI & Machine Learning:**
+  - **[Google Gemini](https://deepmind.google/technologies/gemini/)**: Otak utama untuk analisis konten, peringkasan, dan pemilihan momen viral.
+  - **[Faster-Whisper](https://github.com/guillaumekln/faster-whisper)**: Engine transkripsi audio-ke-teks (ASR) yang sangat cepat dan efisien memori.
+  - **[MediaPipe](https://developers.google.com/mediapipe)**: Solusi visi komputer on-device untuk pelacakan wajah real-time yang presisi.
+
+- **Multimedia Processing:**
+  - **[FFmpeg](https://ffmpeg.org/)**: Framework multimedia universal untuk memproses, memotong, dan menggabungkan video/audio.
+  - **[yt-dlp](https://github.com/yt-dlp/yt-dlp)**: Downloader video paling andal untuk berbagai platform.
+  - **[OpenCV](https://opencv.org/)**: Library standar industri untuk pemrosesan gambar dan manipulasi frame video.
+
+- **Utilities:**
+  - **python-dotenv**: Manajemen konfigurasi environment yang aman.
+
+Terima kasih kepada semua pengembang dan kontributor dari proyek-proyek di atas.

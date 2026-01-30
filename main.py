@@ -93,6 +93,12 @@ def cleanup_on_exit(base_dir: Path, full_clean: bool = False):
                 pass
 
     print("\r✨ Sampai jumpa! 👋                     ")
+    print("----------------------------------------")
+    print("Big Thanks to:")
+    print("- Video Engine: yt-dlp & FFmpeg")
+    print("- AI Models   : MediaPipe (Face Tracking) & Faster-Whisper (ASR)")
+    print("- Vision      : OpenCV")
+    print("----------------------------------------")
 
 def show_menu():
     """Menampilkan menu utama aplikasi."""
