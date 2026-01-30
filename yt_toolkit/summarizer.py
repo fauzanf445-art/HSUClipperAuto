@@ -38,7 +38,7 @@ class Summarize:
             logging.error(f"Validasi API Key gagal: {e}")
             return False
 
-    def __init__(self, api_key: Optional[str], out_dir: str, ffmpeg_path: str = "ffmpeg", ffprobe_path: str = "ffprobe", model: str = 'gemini-flash-latest'):
+    def __init__(self, api_key: Optional[str], out_dir: str, ffmpeg_path: str = "ffmpeg", ffprobe_path: str = "ffprobe", model: str = 'gemini-flash-latest', cookies_path: Optional[str] = None):
         # Mengambil API Key dari parameter atau environment variable
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         
@@ -57,6 +57,7 @@ class Summarize:
         os.makedirs(self.out_dir, exist_ok=True)
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
+        self.cookies_path = cookies_path
 
         # Load prompt from external file for easier maintenance
         prompt_path = os.path.join(os.path.dirname(__file__), 'gemini_prompt.txt')
@@ -77,7 +78,7 @@ class Summarize:
                     'skip_download': True,  # Kita hanya butuh metadata
                     'quiet': True,
                     'no_warnings': True,
-                    'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+                    'cookiefile': self.cookies_path
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -139,7 +140,9 @@ class Summarize:
         )
         
         contents = [
-            instruction_prompt,f"TRANSCRIPT TEXT DATA:\n{transcript_text}"]
+            instruction_prompt,
+            f"TRANSCRIPT TEXT DATA:\n{transcript_text}"
+        ]
 
         path_to_upload = audio_path
         audio_file_obj = None
@@ -157,7 +160,6 @@ class Summarize:
                 
                 if uploaded.state.name == "ACTIVE":
                     audio_file_obj = uploaded
-                    # print("✅ Audio siap dianalisis.") # [CLEANUP] Tidak perlu print baris baru
                     break
                         
             except Exception as e:

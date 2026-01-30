@@ -7,7 +7,7 @@ import re
 from typing import List
 
 # Import utilitas umum
-from .utils import get_duration, run_ffmpeg_with_progress
+from .utils import get_duration, run_ffmpeg_with_progress, get_video_resolution
 
 class VideoCaptioner:
     """
@@ -33,16 +33,6 @@ class VideoCaptioner:
         )
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
-
-    def get_video_resolution(self, video_path):
-        """Mendapatkan resolusi asli video menggunakan ffprobe secara otomatis."""
-        cmd = [
-            self.ffprobe_path, '-v', 'error', '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0',
-            video_path
-        ]
-        result = subprocess.check_output(cmd).decode('utf-8').strip().split('x')
-        return int(result[0]), int(result[1])
 
     def _get_ass_style(self, w, h, alignment=2):
         """Mengatur tampilan teks adaptif berdasarkan resolusi layar."""
@@ -73,7 +63,7 @@ Style: Default,Poppins,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-
 
     def generate_styled_ass(self, video_path, alignment=2):
         """Transkripsi dengan gaya kata-per-kata dan highlight otomatis."""
-        width, height = self.get_video_resolution(video_path)
+        width, height = get_video_resolution(video_path, self.ffprobe_path)
 
         total_duration = get_duration(video_path, self.ffprobe_path)
         segments, _ = self.model.transcribe(video_path, word_timestamps=True, vad_filter=True)
@@ -81,8 +71,6 @@ Style: Default,Poppins,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-
         ass_path = video_path.replace(Path(video_path).suffix, ".ass")
         header = self._get_ass_style(width, height, alignment)
         
-        print(f"   ⏳ Mentranskripsi (AI): 0%", end="\r")
-
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(header + "\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
             for segment in segments:

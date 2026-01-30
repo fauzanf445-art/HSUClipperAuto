@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import logging
 import re
@@ -6,7 +7,7 @@ import subprocess
 from typing import Tuple, Optional, List
 
 # Import utilitas umum
-from .utils import get_duration, run_ffmpeg_with_progress
+from .utils import get_duration, run_ffmpeg_with_progress, extract_video_id, sanitize_filename
 
 try:
     import yt_dlp
@@ -32,38 +33,21 @@ class DownloadVidio:
     - Menggabungkan (remux) video dan audio menjadi file master.
     - Memotong file master menjadi klip-klip pendek.
     """
-    def __init__(self, url: str, output_dir: str, ffmpeg_path: str, ffprobe_path: str, deno_path: str, use_gpu: bool = True, video_id: Optional[str] = None, resolution: str = "1080"):
+    def __init__(self, url: str, output_dir: str, ffmpeg_path: str, ffprobe_path: str, deno_path: str, use_gpu: bool = True, video_id: Optional[str] = None, cookies_path: Optional[str] = None):
         self.url = url
         self.base_output_dir = output_dir
-        self.youtube_id = video_id or self.extract_video_id(url) or 'unknown_video'
+        self.youtube_id = video_id or extract_video_id(url) or 'unknown_video'
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
         self.deno_path = deno_path
+        self.cookies_path = cookies_path
         self.use_gpu = False # Dipaksa False (CPU Only) sesuai permintaan
-        self.resolution = str(resolution).lower().replace('p', '') # Normalisasi resolusi
 
         # Properti ini akan diisi oleh setup_directories()
         self.video_title: Optional[str] = None
         self.channel_name: Optional[str] = None
         self.asset_folder_name: Optional[str] = None
         self.raw_dir: Optional[str] = None
-
-    @staticmethod
-    def extract_video_id(url: str) -> Optional[str]:
-        """Mengekstrak ID video 11 karakter dari URL YouTube."""
-        regex = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
-        m = re.search(regex, url)
-        return m.group(1) if m else None
-
-    @staticmethod
-    def _sanitize_filename(name: str) -> str:
-        """Membersihkan string agar menjadi nama file/folder yang valid."""
-        # Hapus karakter ilegal
-        name = re.sub(r'[\\/*?:"<>|]', "", name)
-        # Pastikan spasi ganda menjadi satu
-        name = re.sub(r'\s+', ' ', name).strip()
-        # Batasi panjangnya agar tidak terlalu panjang untuk path Windows
-        return name[:40]
 
     def _custom_progress_hook(self, d, task_name):
         """Hook kustom untuk menampilkan progress bar yang lebih bersih."""
@@ -101,17 +85,16 @@ class DownloadVidio:
                 bar = '█' * filled_length + '░' * (bar_length - filled_length)
                 
                 # Print dengan \r untuk overwrite baris yang sama
-                print(f"\r📥 {task_name}: [{bar}] {percent:.1f}% | 🚀 {speed_str} | ⏳ {eta_str}   ", end='', flush=True)
+                print(f"\r📥 {task_name}: [{bar}] {percent:.1f}% | 🚀 {speed_str} | ⏳ {eta_str}{' '*20}", end='', flush=True)
             except Exception:
                 pass
                 
         elif d['status'] == 'finished':
-            print(f"\r✅ {task_name}: Selesai! {' ' * 50}", flush=True)
+            print(f"\r✅ {task_name}: Selesai! {' ' * 80}", end='\r', flush=True)
 
     def setup_directories(self):
         """Mengambil metadata video untuk membuat nama folder yang deskriptif."""
         print("⏳ Mengambil metadata video...", end='\r', flush=True)
-        # [CLEANUP] Tambahkan logger bisu
         opts = {'quiet': True, 'no_warnings': True, 'logger': QuietLogger()}
         
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -119,14 +102,14 @@ class DownloadVidio:
             self.video_title = info.get('title', 'unknown-title')
             self.channel_name = info.get('uploader', 'unknown-channel')
         
-        sanitized_title = self._sanitize_filename(self.video_title)
-        sanitized_channel = self._sanitize_filename(self.channel_name)
+        sanitized_title = sanitize_filename(self.video_title)
+        sanitized_channel = sanitize_filename(self.channel_name)
         
         # Format: [Channel] [Judul] [ID] (Dipisah spasi)
         self.asset_folder_name = f"{sanitized_channel} {sanitized_title} {self.youtube_id}"
         self.raw_dir = os.path.join(self.base_output_dir, self.asset_folder_name)
         os.makedirs(self.raw_dir, exist_ok=True)
-        print(f"\r✅ Metadata didapatkan: {self.video_title[:40]}...{' '*20}", flush=True)
+        print(f"\r✅ Metadata didapatkan: {self.video_title[:40]}...{' '*20}", end='\r', flush=True)
 
     def download_both_separate(self) -> Tuple[Optional[str], Optional[str]]:
         """Mengunduh video dan audio secara terpisah dengan format asli."""
@@ -137,51 +120,41 @@ class DownloadVidio:
         video_tmpl = os.path.join(self.raw_dir, 'vidio.%(ext)s')
         audio_tmpl = os.path.join(self.raw_dir, 'audio.%(ext)s')
 
-        try:
-            video_opts = {
-                'format': f'bestvideo[height<={self.resolution}]/best[height<={self.resolution}]',
-                'outtmpl': video_tmpl,
-                'quiet': True,      # Sembunyikan output log yt-dlp
-                'logger': QuietLogger(), # [CLEANUP] Gunakan logger bisu
-                'noprogress': True, # Sembunyikan progress bar bawaan
-                'progress_hooks': [lambda d: self._custom_progress_hook(d, "Video")],
-                'retries': 10,
-                'fragment_retries': 10,
-                'retry_sleep': 5,
-                'continuedl': True,
-                'remote_components': ['ejs:github', 'ejs:npm'], 
-                'update_remote_components': True,            
-                'js_runtimes': {
-                    'deno': {
-                        'path': self.deno_path
-                    }
-                },
-                'postprocessor_args': [
-                '-map_metadata', '-1',
-                ],
-                
-            }
+        # Opsi dasar yang sama untuk video dan audio untuk menghindari duplikasi
+        base_opts = {
+            'quiet': True,
+            'logger': QuietLogger(),
+            'noprogress': True,
+            'retries': 10,
+            'fragment_retries': 10,
+            'retry_sleep': 5,
+            'continuedl': True,
+            'remote_components': ['ejs:github', 'ejs:npm'],
+            'update_remote_components': True,
+            'js_runtimes': {'deno': {'path': self.deno_path}},
+        }
+        
+        if self.cookies_path:
+            base_opts['cookiefile'] = self.cookies_path
+            logging.info(f"Menggunakan file cookies dari: {self.cookies_path}")
 
-            # 2. Konfigurasi Download Audio (Default / Raw)
-            audio_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': audio_tmpl,
-                'quiet': True,
-                'logger': QuietLogger(), # [CLEANUP] Gunakan logger bisu
-                'noprogress': True,
-                'progress_hooks': [lambda d: self._custom_progress_hook(d, "Audio")],
-                'retries': 10,
-                'fragment_retries': 10,
-                'retry_sleep': 5,
-                'continuedl': True,
-                'remote_components': ['ejs:github', 'ejs:npm'], 
-                'update_remote_components': True,            
-                'js_runtimes': {
-                    'deno': {
-                        'path': self.deno_path
-                    }
-                },
-            }
+        # Opsi spesifik untuk video: prioritaskan format mp4 untuk kompatibilitas
+        video_opts = {
+            **base_opts,
+            'format': 'bestvideo[ext=mp4]/bestvideo',
+            'outtmpl': video_tmpl,
+            'progress_hooks': [lambda d: self._custom_progress_hook(d, "Video")],
+        }
+
+        # Opsi spesifik untuk audio: prioritaskan format m4a (AAC)
+        audio_opts = {
+            **base_opts,
+            'format': 'bestaudio[ext=m4a]/bestaudio',
+            'outtmpl': audio_tmpl,
+            'progress_hooks': [lambda d: self._custom_progress_hook(d, "Audio")],
+        }
+
+        try:
             # Download Video
             with yt_dlp.YoutubeDL(video_opts) as ydl:
                 v_info = ydl.extract_info(self.url, download=True)
@@ -193,8 +166,14 @@ class DownloadVidio:
                 a_path = a_info.get('filepath') or ydl.prepare_filename(a_info)
 
             return v_path, a_path
+        except yt_dlp.utils.DownloadError as e:
+            if "403" in str(e) or "Forbidden" in str(e):
+                logging.error(f"⛔ ERROR 403 FORBIDDEN: YouTube menolak akses unduhan.\n   👉 Saran: Update yt-dlp (`pip install -U yt-dlp`) atau cek koneksi internet/VPN.\n   Detail: {e}")
+            else:
+                logging.error(f"❌ Gagal download (yt-dlp error): {e}")
+            return None, None
         except Exception as e:
-            logging.error(f"Gagal download: {e}")
+            logging.error(f"❌ Gagal download (Error Umum): {e}")
             return None, None
 
     def convert_audio_for_ai(self, input_audio_path: str) -> Optional[str]:
@@ -248,13 +227,14 @@ class DownloadVidio:
             '-i', video_path,
             '-i', audio_path,
             '-c:v', 'libx264',      # Encoder video CPU yang sangat kompatibel.
-            '-preset', 'ultrafast', # Preset tercepat, karena kualitas diatur oleh CRF.
+            '-preset', 'veryfast',  # Balance terbaik antara kecepatan dan ukuran file.
             '-crf', '18',           # Constant Rate Factor: Kualitas visual (semakin rendah, semakin bagus). 18 adalah kualitas tinggi.
             '-r', '30',             # Standarisasi frame rate ke 30fps.
             '-g', '30',             # WAJIB: Keyframe tiap 1 detik agar cutting 'copy' akurat
             '-c:a', 'aac',
             '-ar', '44100',
             '-af', 'aresample=async=1:min_comp=0.001:max_soft_comp=0.01',
+            '-map_metadata', '-1',  # Hapus semua metadata dari file asli
             '-map', '0:v:0',
             '-map', '1:a:0',
             '-fflags', '+genpts',
@@ -332,10 +312,11 @@ class DownloadVidio:
                 '-ss', str(start_sec), 
                 '-i', master_path,
                 '-t', str(duration),
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', # Re-encode dengan CPU, kualitas baik (23).
+                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', # Re-encode dengan CPU, kualitas baik (23).
                 '-c:a', 'aac',          # Re-encode audio ke AAC standar.
                 '-b:a', '128k',         # Bitrate audio yang cukup untuk klip pendek.
                 '-map_metadata', '-1',  # Hapus semua metadata dari file asli.
+                '-avoid_negative_ts', 'make_zero', # [FIX] Reset timestamp agar audio/video start bareng
                 output_clip
             ]
 

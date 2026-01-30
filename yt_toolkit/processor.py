@@ -11,37 +11,9 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from typing import List
 from collections import deque
-from contextlib import contextmanager
 
 # Import utilitas umum
-from .utils import get_duration, run_ffmpeg_with_progress
-
-@contextmanager
-def suppress_stderr():
-    """
-    Context manager untuk membungkam output stderr (C++ logs) sementara.
-    Berguna untuk menyembunyikan log inisialisasi TensorFlow/MediaPipe.
-    """
-    try:
-        # Simpan file descriptor stderr asli
-        original_stderr_fd = sys.stderr.fileno()
-        
-        # Buat null device
-        with open(os.devnull, 'w') as devnull:
-            # Duplikasi stderr asli agar bisa dikembalikan nanti
-            saved_stderr_fd = os.dup(original_stderr_fd)
-            
-            try:
-                # Redirect stderr ke null
-                os.dup2(devnull.fileno(), original_stderr_fd)
-                yield
-            finally:
-                # Kembalikan stderr ke aslinya
-                os.dup2(saved_stderr_fd, original_stderr_fd)
-                os.close(saved_stderr_fd)
-    except Exception:
-        # Fallback jika terjadi error (misal tidak ada akses ke fileno)
-        yield
+from .utils import get_duration, run_ffmpeg_with_progress, suppress_stderr
 
 class VideoProcessor:
     """
@@ -75,8 +47,8 @@ class VideoProcessor:
         self.SMOOTHING_BASE_FACTOR = 0.02  # Faktor kehalusan dasar (kamera lambat).
         self.SMOOTHING_BOOST_FACTOR = 0.15 # Faktor kehalusan tambahan saat subjek bergerak cepat.
         self.SMOOTHING_MAX_DIFF = 200.0    # Jarak maksimal untuk menghitung boost.
-        self.MODE_BUFFER_SIZE = 45         # Jumlah frame untuk validasi perpindahan mode (1.5 detik @ 30fps).
-        self.MODE_SWITCH_THRESHOLD = 0.9   # 90% frame di buffer harus konsisten untuk ganti mode.
+        self.MODE_BUFFER_SIZE = 30         # Jumlah frame untuk validasi perpindahan mode (1.5 detik @ 30fps).
+        self.MODE_SWITCH_THRESHOLD = 0.7   # 70% frame di buffer harus konsisten untuk ganti mode.
 
         # Konfigurasi Podcast Mode (Smart Static)
         self.PODCAST_STABILITY_THRESHOLD = 20      # Jumlah frame subjek harus stabil sebelum kamera 'cut'.
@@ -168,31 +140,18 @@ class VideoProcessor:
                 
         return self.current_mode
 
-    def process_portrait(self, input_path: str, output_path: str):
-        # 1. Tentukan file sementara (tanpa suara)
-        temp_output = output_path.replace(".mkv", "_temp_v.mkv")
-
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened(): 
-            logging.error(f"Gagal membuka video: {input_path}")
-            return False
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0: fps = 30.0 # Fallback jika FPS tidak terdeteksi
-
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    def _portrait_logic(self, cap, out, w, h, fps):
+        """Logika inti untuk Monologue Mode (Face Tracking)."""
         target_w = int(h * 9 / 16)
-        
-        out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (target_w, h))
 
         self.prev_centers = {}
         self.mode_history = [] # Reset buffer untuk video baru
         self.current_mode = 1  # Reset mode ke default
         frame_count = 0 
+        last_timestamp_ms = -1
 
         # Panggil helper untuk inisialisasi detector dengan fallback GPU->CPU.
-        self._initialize_detector()
+        if not self.detector: self._initialize_detector()
 
         try:
             # --- LOOK-AHEAD SETUP ---
@@ -208,9 +167,14 @@ class VideoProcessor:
                     # Konversi untuk MediaPipe
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-                    
-                    # Jalankan Deteksi (Timestamp berdasarkan frame input)
-                    result = self.detector.detect_for_video(mp_image, int((frame_count * 1000) / fps))
+
+                    # Hitung timestamp manual dan pastikan selalu naik untuk mencegah error MediaPipe.
+                    timestamp_ms = int((frame_count * 1000) / fps) 
+                    if timestamp_ms <= last_timestamp_ms:
+                        timestamp_ms = last_timestamp_ms + 1
+                    last_timestamp_ms = timestamp_ms
+
+                    result = self.detector.detect_for_video(mp_image, timestamp_ms)
 
                     # Ambil semua pusat wajah yang terdeteksi
                     faces_x = []
@@ -231,15 +195,7 @@ class VideoProcessor:
                     
                     last_face_x = current_face_x
 
-                    # Tentukan mode berdasarkan history input saat ini
-                    mode = self._determine_mode(len(faces_x))
-                    
-                    # Simpan ke buffer
-                    frame_buffer.append({
-                        'frame': frame,
-                        'faces_x': faces_x,
-                        'mode': mode
-                    })
+                    frame_buffer.append({'frame': frame, 'faces_x': faces_x})
                     frame_count += 1
                 
                 # 2. FASE RENDER (Hanya jika buffer penuh atau stream habis)
@@ -250,111 +206,50 @@ class VideoProcessor:
                     data = frame_buffer.popleft()
                     curr_frame = data['frame']
                     curr_faces = data['faces_x']
-                    curr_mode = data['mode']
-                    
-                    if curr_mode == 2:
-                    # --- MODE 2: CINEMATIC (ZOOM + BLUR BACKGROUND) ---
-                    
-                    # 1. Buat Background Blur (Optimized)
-                    # Ambil bagian tengah frame selebar target_w untuk background
-                        bg_x_start = max(0, (w - target_w) // 2)
-                        bg_crop = curr_frame[:, bg_x_start:bg_x_start+target_w]
-                    
-                    # Teknik Cepat: Downscale -> Blur -> Upscale (Hemat CPU)
-                        small_bg = cv2.resize(bg_crop, (0,0), fx=0.1, fy=0.1, interpolation=cv2.INTER_NEAREST)
-                        blurred_small = cv2.GaussianBlur(small_bg, (9, 9), 0)
-                        background = cv2.resize(blurred_small, (target_w, h), interpolation=cv2.INTER_LINEAR)
-                    # Gelapkan background agar video utama lebih menonjol (Dimming)
-                        final_frame = cv2.addWeighted(background, 0.6, np.zeros_like(background), 0, 0)
 
-                    # 2. Siapkan Foreground (Video Utama)
-                    # Potong 15% kiri dan kanan (Zoom) agar video lebih memenuhi layar
-                        crop_margin = self.CINEMATIC_CROP_MARGIN 
-                        x_start = int(w * crop_margin)
-                        x_end = int(w * (1 - crop_margin))
-                        fg_crop = curr_frame[:, x_start:x_end]
+                    # --- LOGIKA LOOK-AHEAD ---
+                    # Untuk membuat pergerakan kamera lebih 'cerdas' dan tidak reaktif,
+                    # kita 'mengintip' posisi wajah di beberapa frame berikutnya (dari buffer).
+                    future_xs = []
                     
-                    # Resize foreground agar lebarnya pas dengan target_w
-                        fg_h_new = int(target_w * (h / (x_end - x_start)))
-                        foreground = cv2.resize(fg_crop, (target_w, fg_h_new), interpolation=cv2.INTER_AREA)
+                    # Masukkan posisi wajah frame saat ini (jika ada)
+                    if curr_faces: future_xs.append(curr_faces[0])
                     
-                    # 3. Tempel Foreground ke Background
-                        y_offset = (h - fg_h_new) // 2
+                    # Intip masa depan di buffer
+                    for item in frame_buffer:
+                        if item['faces_x']:
+                            future_xs.append(item['faces_x'][0])
                     
-                    # Handling jika hasil zoom lebih tinggi dari layar (jarang terjadi dengan margin 0.15)
-                        if y_offset < 0:
-                            final_frame = foreground[-y_offset:-y_offset+h, :]
-                        else:
-                            final_frame[y_offset : y_offset + fg_h_new, :] = foreground
+                    if future_xs:
+                        # Target kamera adalah RATA-RATA dari posisi wajah sekarang dan di masa depan.
+                        avg_target = int(sum(future_xs) / len(future_xs))
+                        # Hasil rata-rata ini kemudian dihaluskan lagi dengan LERP untuk inersia.
+                        smooth_x = self._get_smooth_x('left', avg_target)
                     else:
-                    # --- MODE 1: SINGLE FACE TRACKING (MONOLOGUE) ---
-                        # --- LOGIKA LOOK-AHEAD ---
-                        # Untuk membuat pergerakan kamera lebih 'cerdas' dan tidak reaktif,
-                        # kita 'mengintip' posisi wajah di beberapa frame berikutnya (dari buffer).
-                        future_xs = []
-                        
-                        # Masukkan posisi wajah frame saat ini (jika ada)
-                        if curr_faces: future_xs.append(curr_faces[0])
-                        
-                        # Intip masa depan di buffer
-                        for item in frame_buffer:
-                            if item['mode'] == 1 and item['faces_x']:
-                                future_xs.append(item['faces_x'][0])
-                        
-                        if future_xs:
-                            # Target kamera adalah RATA-RATA dari posisi wajah sekarang dan di masa depan.
-                            avg_target = int(sum(future_xs) / len(future_xs))
-                            # Hasil rata-rata ini kemudian dihaluskan lagi dengan LERP untuk inersia.
-                            smooth_x = self._get_smooth_x('left', avg_target)
-                        else:
-                            # Fallback jika tidak ada wajah sama sekali di buffer
-                            smooth_x = self._get_smooth_x('left', self.prev_centers.get('left', w // 2))
-                    
-                        left = np.clip(smooth_x - (target_w // 2), 0, w - target_w)
-                        final_frame = curr_frame[0:h, int(left):int(left + target_w)]
-                        final_frame = cv2.resize(final_frame, (target_w, h))
+                        # Fallback jika tidak ada wajah sama sekali di buffer:
+                        # Tetap di posisi terakhir atau kembali ke tengah.
+                        smooth_x = self._get_smooth_x('left', self.prev_centers.get('left', w // 2))
+                
+                    left = np.clip(smooth_x - (target_w // 2), 0, w - target_w)
+                    final_frame = curr_frame[0:h, int(left):int(left + target_w)]
+                    final_frame = cv2.resize(final_frame, (target_w, h))
                 
                     out.write(final_frame)
                 
                 # Jika stream habis dan buffer kosong, berhenti
                 if not ret and not frame_buffer:
                     break
-
         finally:
-            # Pastikan resource OpenCV dilepas sebelum masuk ke proses audio
-            cap.release()
-            out.release()
-            # Tutup detector segera setelah selesai satu video
-            if self.detector:
-                self.detector.close()
-                self.detector = None
+            # Reset state untuk pemanggilan berikutnya, memastikan tidak ada sisa data
+            # dari pemrosesan klip sebelumnya yang memengaruhi klip berikutnya.
+            self.prev_centers = {}
+            self.mode_history = []
 
-        # 2. PROSES PENTING: Gabungkan Audio menggunakan FFmpeg
-        return self.add_audio(temp_output, input_path, output_path)
-
-    def process_cinematic_portrait(self, input_path: str, output_path: str):
-        """
-        Mengubah video landscape menjadi portrait dengan menambahkan bar hitam (letterbox).
-        Video akan dipotong sedikit di bagian tepi dan ditempatkan di tengah.
-        """
-        # 1. Setup video capture dan writer
-        temp_output = output_path.replace(".mkv", "_temp_v.mkv")
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            logging.error(f"Gagal membuka video: {input_path}")
-            return False
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0: fps = 30.0
-
-        w_in = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h_in = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
+    def _cinematic_logic(self, cap, out, w_in, h_in, fps):
+        """Logika inti untuk Cinematic Mode (Vlog/Doc)."""
         # Tentukan resolusi output (misal: 1080x1920)
         w_out = 1080
         h_out = 1920
-
-        out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w_out, h_out))
 
         # 2. Hitung dimensi crop dan scale (lakukan sekali saja)
         # Potong sesuai margin yang ditentukan
@@ -370,7 +265,6 @@ class VideoProcessor:
         # Hitung posisi vertikal untuk menempatkan video di tengah
         y_offset = (h_out - scaled_h) // 2
 
-        # Koordinat crop untuk background (Center Crop)
         bg_x_start = max(0, (w_in - w_out) // 2)
 
         try:
@@ -398,33 +292,15 @@ class VideoProcessor:
                     final_frame[y_offset : y_offset + scaled_h, 0:w_out] = scaled_frame
 
                 out.write(final_frame)
-        finally:
-            cap.release()
-            out.release()
+        except Exception as e:
+            logging.error(f"Error dalam _cinematic_logic: {e}")
 
-        # 4. Gabungkan kembali audio
-        return self.add_audio(temp_output, input_path, output_path)
-
-    def process_podcast_portrait(self, input_path: str, output_path: str):
-        """
-        Mode khusus Podcast:
-        - Menganalisa wajah untuk menentukan area crop.
-        - TIDAK menggunakan motion tracking (panning).
-        - Kamera statis (dikunci) dan hanya berpindah (cut) jika posisi subjek berubah drastis.
-        """
-        temp_output = output_path.replace(".mkv", "_temp_v.mkv")
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened(): return False
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    def _podcast_logic(self, cap, out, w, h, fps):
+        """Logika inti untuk Podcast Mode (Smart Static)."""
         target_w = int(h * 9 / 16)
-        
-        out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (target_w, h))
 
-        # Panggil helper untuk inisialisasi detector dengan fallback GPU->CPU.
-        self._initialize_detector()
+        # Panggil helper untuk inisialisasi detector jika belum ada.
+        if not self.detector: self._initialize_detector()
 
         # --- STATE VARIABLES ---
         
@@ -446,6 +322,7 @@ class VideoProcessor:
         split_y_end = split_y_start + split_crop_h
         
         frame_count = 0
+        last_timestamp_ms = -1
 
         try:
             # [LOOK-AHEAD SETUP]
@@ -460,8 +337,13 @@ class VideoProcessor:
                     # Deteksi Wajah
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-                    result = self.detector.detect_for_video(mp_image, int((frame_count * 1000) / fps))
+                    # Hitung timestamp manual dan pastikan selalu naik.
+                    timestamp_ms = int((frame_count * 1000) / fps) 
+                    if timestamp_ms <= last_timestamp_ms:
+                        timestamp_ms = last_timestamp_ms + 1
+                    last_timestamp_ms = timestamp_ms
 
+                    result = self.detector.detect_for_video(mp_image, timestamp_ms)
                     # Ambil koordinat wajah
                     faces_x = []
                     if result.detections:
@@ -579,11 +461,76 @@ class VideoProcessor:
                 if not ret and not frame_buffer:
                     break
         finally:
+            # Reset state untuk pemanggilan berikutnya
+            self.prev_centers = {}
+            self.mode_history = []
+
+    def _process_video_core(self, input_path: str, output_path: str, logic_function, target_resolution_func):
+        """
+        Template method untuk menangani boilerplate pemrosesan video.
+        Membuka, menulis, menutup file, dan menggabungkan audio.
+        """
+        # Tutup dan reset detector yang ada sebelum memproses klip baru untuk mereset timestamp.
+        self.close()
+
+        # Gunakan pathlib untuk manipulasi nama file yang aman
+        out_p = Path(output_path)
+        temp_output = str(out_p.with_name(f"{out_p.stem}_temp_v{out_p.suffix}"))
+        
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            logging.error(f"Gagal membuka video: {input_path}")
+            return False
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # Dapatkan resolusi target dari fungsi yang diberikan
+        target_w, target_h = target_resolution_func(w, h)
+
+        out = cv2.VideoWriter(temp_output, cv2.VideoWriter_fourcc(*'mp4v'), fps, (target_w, target_h))
+
+        try:
+            # Jalankan logika pemrosesan spesifik (misal: _portrait_logic)
+            logic_function(cap, out, w, h, fps)
+        except Exception as e:
+            logging.error(f"Error selama pemrosesan video '{logic_function.__name__}': {e}", exc_info=True)
+            return False
+        finally:
+            # Pastikan semua resource dilepaskan
             cap.release()
             out.release()
-            if self.detector: self.detector.close(); self.detector = None
 
+        # Gabungkan audio setelah pemrosesan visual selesai
         return self.add_audio(temp_output, input_path, output_path)
+
+    def process_portrait(self, input_path: str, output_path: str):
+        """Memproses video menggunakan logika Monologue Mode."""
+        return self._process_video_core(
+            input_path,
+            output_path,
+            self._portrait_logic,
+            lambda w, h: (int(h * 9 / 16), h)
+        )
+
+    def process_cinematic_portrait(self, input_path: str, output_path: str):
+        """Memproses video menggunakan logika Cinematic Mode."""
+        return self._process_video_core(
+            input_path,
+            output_path,
+            self._cinematic_logic,
+            lambda w, h: (1080, 1920) # Resolusi output tetap
+        )
+
+    def process_podcast_portrait(self, input_path: str, output_path: str):
+        """Memproses video menggunakan logika Podcast Mode."""
+        return self._process_video_core(
+            input_path,
+            output_path,
+            self._podcast_logic,
+            lambda w, h: (int(h * 9 / 16), h)
+        )
 
     def add_audio(self, video_visual_path, audio_source_path, final_output_path):
         """
@@ -601,7 +548,7 @@ class VideoProcessor:
             '-i', v_path,    # Input 0: Video tanpa suara
             '-i', a_path,    # Input 1: Video asli (sumber audio)
             '-c:v', 'copy',             # Video tidak di-encode ulang (cepat)
-            '-c:a', 'aac',              # Encode audio ke format AAC agar kompatibel
+            '-c:a', 'copy',             # [FIX] Copy audio stream (jangan re-encode) agar sync terjaga
             '-map', '0:v:0',            # Ambil video dari input 0
             '-map', '1:a:0',            # Ambil audio dari input 1
             '-map_metadata', '-1',      # Hapus metadata lama yang mengganggu
