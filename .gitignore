@@ -20,6 +20,7 @@ dist/
 
 # Aset Besar & Binary (Agar repo tidak berat, user lain harus download sendiri sesuai README)
 bin/
+fonts/
 models/
 cookies/
 *.exe
