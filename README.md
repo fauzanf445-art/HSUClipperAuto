@@ -16,6 +16,16 @@ Sebuah toolkit canggih untuk konten kreator yang ingin mengotomatisasi proses ed
 
 ---
 
+## Spesifikasi Sistem
+
+| Komponen | Spesifikasi Minimal (Pas-pasan) | Spesifikasi Rekomendasi (Lancar) |
+| :--- | :--- | :--- |
+| **CPU** | Intel Core i5 Gen 8 / AMD Ryzen 5 | Intel Core i7 Gen 10+ / Ryzen 7 |
+| **RAM** | 8 GB | 16 GB atau lebih |
+| **GPU (VGA)** | Integrated Graphics (UHD/Vega) | NVIDIA RTX Series (Min. 4GB VRAM) |
+| **Penyimpanan** | 5 GB ruang kosong (untuk model AI) | SSD (Sangat disarankan untuk akses model) |
+| **OS** | Windows 10/11, Linux, atau macOS | Linux (Ubuntu) biasanya lebih efisien untuk AI |
+
 ## Panduan Instalasi & Penggunaan
 
 Ikuti langkah-langkah ini untuk menjalankan aplikasi di komputer Anda.
