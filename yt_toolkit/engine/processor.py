@@ -120,6 +120,9 @@ class UniversalRenderer:
                 else:
                     # ROI gagal, reset ke full frame (fallback)
                     self.roi = None
+                    # [FIX] Increment timestamp karena detect_for_video sudah dipanggil sekali di atas
+                    timestamp_ms += 1
+                    self.last_timestamp_ms = timestamp_ms
 
         # B. FULL FRAME DETECTION (Standard)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
