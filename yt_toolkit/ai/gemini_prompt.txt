@@ -13,12 +13,15 @@ Input Data:
 3.  **Clip Duration**: Strictly between 30 and 90 seconds.
 4.  **Clip Structure**: Each clip must have a clear Hook, Insight, and Resolution.
 5.  **Language**: All text fields (`title`, `description`, `caption`) MUST be in Indonesian.
+6.  **Sentence Integrity**: Ensure start_time and end_time align with complete sentences. Do not cut mid-sentence.
+7.  **Clip IDs**: Assign a sequential integer ID to each clip (1, 2, 3...), useful for file naming.
 
 {{
 "video_title": "Original Video Title",
 "audio_energy_profile": "Summary of the speaker's tone and emotional peaks",
 "clips": [
     {{
+    "id": 1,
     "title": "Indonesian title, 3 to 5 words.",
     "start_time": 0.00,
     "end_time": 0.00,

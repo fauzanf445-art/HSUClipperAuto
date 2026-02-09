@@ -1,0 +1,28 @@
+# Konfigurasi Utama YT Toolkit
+
+# Model AI untuk transkripsi.
+# Opsi: "large-v3-turbo", "large-v3", "medium.en", "small", "base", dll.
+# "large-v3-turbo" adalah custom model yang saya sediakan, lebih cepat dari "large-v3".
+whisper_model: "large-v3-turbo"
+
+# Set ke false jika ingin menyimpan file mentah untuk debugging atau resume.
+cleanup_enabled: false
+
+# Paksa video menjadi 30 FPS saat download.
+# True: Proses rendering 2x LEBIH CEPAT (Recommended untuk PC standar).
+# False: Kualitas gerak lebih halus (60 FPS) tapi rendering lebih lama.
+force_30fps: true
+
+# Opsi untuk membersihkan semua file cache & output saat memilih menu "Refresh App".
+# Jika false, hanya folder output yang dihapus, log tetap ada.
+full_cleanup_on_refresh: true
+
+# Nama folder di dalam "Downloads" pengguna untuk menyimpan hasil akhir.
+# Contoh: "Video Pendek" akan menyimpan ke C:\Users\Anda\Downloads\Video Pendek\[Judul Video]
+final_output_subfolder: "YT Toolkit Clips"
+
+# Konfigurasi Deteksi Wajah (Prioritas 3)
+# Mengaktifkan Region of Interest (ROI) untuk mempercepat deteksi wajah 2x-3x lipat.
+face_tracking_roi: true
+# Interval skip frame dasar (akan disesuaikan secara adaptif jika ROI aktif).
+face_tracking_skip_frames: 3

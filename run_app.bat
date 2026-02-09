@@ -1,52 +1,59 @@
 @echo off
+setlocal
 title YT Toolkit Launcher
 
-REM Pindah ke direktori tempat file ini berada (memastikan path benar)
+REM Pindah ke direktori script berada (penting jika dijalankan sebagai Administrator)
 cd /d "%~dp0"
 
-echo ==================================================
-echo      YT TOOLKIT - AUTO CLIP & CAPTION
-echo ==================================================
-echo.
+echo ===================================================
+echo      YT TOOLKIT - AUTO CLIPPER
+echo ===================================================
 
-REM 1. Cek apakah Python terinstall
+REM 1. Cek apakah Python terinstal (Cek 'python' lalu 'py')
+set PYTHON_CMD=python
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python tidak terdeteksi!
-    echo Mohon install Python 3.10+ dari python.org dan pastikan centang "Add to PATH".
-    pause
-    exit /b
-)
-
-REM 2. Cek Virtual Environment (.venv)
-if not exist ".venv" (
-    echo [SETUP] Virtual environment belum ada. Sedang membuat...
-    python -m venv .venv
-    
-    echo [SETUP] Menginstall library dari requirements.txt...
-    echo Mohon tunggu, proses ini membutuhkan koneksi internet...
-    
-    REM Menggunakan pip dari dalam venv secara langsung agar lebih aman
-    ".venv\Scripts\python.exe" -m pip install --upgrade pip
-    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-    
+    py --version >nul 2>&1
     if %errorlevel% neq 0 (
-        echo [ERROR] Gagal menginstall library. Cek koneksi internet Anda.
+        echo [ERROR] Python tidak terdeteksi di sistem (PATH).
+        echo Harap instal Python 3.10+ dari https://python.org dan centang "Add to PATH".
         pause
-        exit /b
+        exit /b 1
     )
-    echo [SETUP] Instalasi selesai!
+    set PYTHON_CMD=py
 )
 
-REM 3. Jalankan Program Utama
-echo.
-echo [START] Menjalankan aplikasi...
-echo --------------------------------------------------
+REM 2. Cek/Buat Virtual Environment
+if not exist ".venv" (
+    echo [INFO] Virtual environment tidak ditemukan. Membuat baru...
+    %PYTHON_CMD% -m venv .venv
+    if %errorlevel% neq 0 (
+        echo [ERROR] Gagal membuat .venv. Cek izin folder.
+        pause
+        exit /b 1
+    )
+)
 
-REM Memanggil python dari .venv secara eksplisit untuk memastikan library terbaca
-".venv\Scripts\python.exe" main.py
+REM Selalu cek update dependensi saat launcher dijalankan
+echo [INFO] Memastikan dependensi terupdate...
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-REM 4. Tahan jendela agar tidak langsung tertutup saat selesai/error
-echo.
-echo Program berhenti. Tekan tombol apa saja untuk keluar...
-pause >nul
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Gagal menginstal library. Cek koneksi internet atau requirements.txt.
+    pause
+    exit /b 1
+)
+
+REM 3. Jalankan Aplikasi
+REM %* meneruskan argumen CLI (misal: --url "...") ke script python
+echo [INFO] Memulai aplikasi...
+.venv\Scripts\python.exe main.py %*
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [STOP] Aplikasi berhenti dengan error.
+    pause
+)
+pause
