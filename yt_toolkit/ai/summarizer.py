@@ -112,6 +112,10 @@ class Summarize:
                 contents=contents,
                 config={'response_mime_type': 'application/json'}
             )
+            
+            if not response.text:
+                logging.warning("Respon Gemini kosong atau None (Mungkin terkena Safety Filter). Mengembalikan JSON kosong.")
+                return "{}"
             return response.text
         except Exception as e:
             logging.error(f"Gagal generate summary dari Gemini: {e}")
@@ -120,6 +124,10 @@ class Summarize:
     def save_summary(self, summary_text: str, transcript_text: Optional[str] = None, target_dir: str = None) -> str:
         """Menyimpan hasil summary ke file transcripts.json."""
         
+        if summary_text is None:
+            logging.warning("summary_text bernilai None. Menggunakan default '{}' untuk mencegah crash.")
+            summary_text = "{}"
+
         # Membersihkan format markdown jika AI secara keliru membungkus output JSON dengan ```json ... ```
         clean_json = summary_text.strip()
         if clean_json.startswith("```"):

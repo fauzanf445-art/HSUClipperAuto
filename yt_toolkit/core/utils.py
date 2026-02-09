@@ -304,7 +304,7 @@ def setup_paths() -> SimpleNamespace:
     paths.ENV_FILE = BASE_DIR / ".env"
     paths.CONFIG_FILE = BASE_DIR / "config.yaml"
     paths.PROMPT_FILE = BASE_DIR / "yt_toolkit" / "ai" / "gemini_prompt.txt"
-    paths.USER_DOWNLOADS_DIR = Path.home() / "Downloads"
+    paths.USER_DOWNLOADS_DIR = BASE_DIR
     
     # Inject bin folder to PATH automatically
     bin_path = str(BASE_DIR / "bin")

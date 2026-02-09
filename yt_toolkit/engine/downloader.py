@@ -10,10 +10,8 @@ from yt_toolkit.core.utils import extract_video_id, sanitize_filename, setup_pat
 
 try:
     import yt_dlp
-    from yt_dlp.utils import download_range_func
 except ImportError as e:
     yt_dlp = None
-    download_range_func = None
     _yt_dlp_error = e
 else:
     _yt_dlp_error = None
@@ -140,7 +138,7 @@ class DownloadVidio:
         Args:
             clips: List dictionary [{'start_time': 10.5, 'end_time': 20.0}, ...]
         """
-        if yt_dlp is None or download_range_func is None:
+        if yt_dlp is None:
             logging.error("yt-dlp tidak tersedia atau versi tidak kompatibel.")
             return []
 
@@ -161,7 +159,7 @@ class DownloadVidio:
             start = c.get('start_time') or c.get('start')
             end = c.get('end_time') or c.get('end')
             if start is not None and end is not None:
-                ranges.append([float(start), float(end)])
+                ranges.append({'start_time': float(start), 'end_time': float(end)})
 
         if not ranges:
             logging.warning("Tidak ada timestamp valid dalam daftar klip.")
@@ -169,8 +167,9 @@ class DownloadVidio:
 
         print(f"✂️ Mengunduh {len(ranges)} klip...", end='\r', flush=True)
 
-        # Membuat filter range menggunakan utilitas yt-dlp
-        range_filter = download_range_func(None, ranges, None)
+        # Membuat filter range menggunakan lambda, que es el método estándar de yt-dlp.
+        # La función lambda recibe el diccionario de información y debe devolver la lista de rangos.
+        range_filter = lambda info, ydl: ranges
 
         # Gunakan format timestamp native dari yt-dlp agar unik dan aman
         outtmpl = 'clip_%(section_start)s-%(section_end)s.%(ext)s'
@@ -324,7 +323,11 @@ def fetch_youtube_transcript(video_url: str, cookies_path: Optional[str] = None,
                 if target_url: break
             
             if target_url:
-                with urllib.request.urlopen(target_url) as response:
+                req = urllib.request.Request(
+                    target_url, 
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+                )
+                with urllib.request.urlopen(req) as response:
                     data = json.loads(response.read().decode())
                 
                 full_text = []
