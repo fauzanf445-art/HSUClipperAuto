@@ -93,39 +93,47 @@ class UniversalRenderer:
             rw = min(rw, img_w - rx); rh = min(rh, img_h - ry)
             
             if rw > 20 and rh > 20: # Pastikan ROI valid
-                crop = frame[ry:ry+rh, rx:rx+rw]
-                rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                mp_crop = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_crop)
-                
-                result = self.processor.detector.detect_for_video(mp_crop, timestamp_ms)
-                
-                if result.detections:
-                    for det in result.detections:
-                        bbox = det.bounding_box
-                        # Translate koordinat crop kembali ke full frame
-                        global_x = bbox.origin_x + rx
-                        global_y = bbox.origin_y + ry
-                        
-                        area = bbox.width * bbox.height
-                        center_x = int(global_x + bbox.width / 2)
-                        center_y = int(global_y + bbox.height / 2)
-                        detected_faces.append({'area': area, 'x': center_x, 'y': center_y, 'w': bbox.width, 'h': bbox.height})
+                try:
+                    crop = frame[ry:ry+rh, rx:rx+rw]
+                    # [FIX] Ensure memory is contiguous for C++ interop to prevent crash
+                    rgb_crop = np.ascontiguousarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                    mp_crop = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_crop)
                     
-                    # Update ROI (Center on face, 3x size)
-                    main = max(detected_faces, key=lambda f: f['area'])
-                    roi_w = int(main['w'] * 3)
-                    roi_h = int(main['h'] * 3)
-                    self.roi = (int(main['x'] - roi_w/2), int(main['y'] - roi_h/2), roi_w, roi_h)
-                    return detected_faces
-                else:
-                    # ROI gagal, reset ke full frame (fallback)
+                    result = self.processor.detector.detect_for_video(mp_crop, timestamp_ms)
+                    
+                    if result.detections:
+                        for det in result.detections:
+                            bbox = det.bounding_box
+                            # Translate koordinat crop kembali ke full frame
+                            global_x = bbox.origin_x + rx
+                            global_y = bbox.origin_y + ry
+                            
+                            area = bbox.width * bbox.height
+                            center_x = int(global_x + bbox.width / 2)
+                            center_y = int(global_y + bbox.height / 2)
+                            detected_faces.append({'area': area, 'x': center_x, 'y': center_y, 'w': bbox.width, 'h': bbox.height})
+                        
+                        # Update ROI (Center on face, 3x size)
+                        main = max(detected_faces, key=lambda f: f['area'])
+                        roi_w = int(main['w'] * 3)
+                        roi_h = int(main['h'] * 3)
+                        self.roi = (int(main['x'] - roi_w/2), int(main['y'] - roi_h/2), roi_w, roi_h)
+                        return detected_faces
+                    else:
+                        # ROI gagal, reset ke full frame (fallback)
+                        self.roi = None
+                        # [FIX] Increment timestamp karena detect_for_video sudah dipanggil sekali di atas
+                        timestamp_ms += 1
+                        self.last_timestamp_ms = timestamp_ms
+                except Exception as e:
+                    # [FIX] Safety net: If ROI detection crashes, fallback to full frame
+                    logging.warning(f"ROI Detection failed: {e}. Falling back to full frame.")
                     self.roi = None
-                    # [FIX] Increment timestamp karena detect_for_video sudah dipanggil sekali di atas
                     timestamp_ms += 1
                     self.last_timestamp_ms = timestamp_ms
 
         # B. FULL FRAME DETECTION (Standard)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         result = self.processor.detector.detect_for_video(mp_image, timestamp_ms)
         
