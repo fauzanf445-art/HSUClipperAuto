@@ -3,7 +3,6 @@ import mediapipe as mp
 import os
 import logging
 import numpy as np
-import subprocess
 import yaml
 from pathlib import Path
 from mediapipe.tasks import python
@@ -272,7 +271,7 @@ class VideoProcessor:
             
         if not os.path.exists(model_path):
             logging.error(f"Model {model_path} tidak ditemukan!")
-            raise FileNotFoundError(f"Silakan unduh detector.tflite dari MediaPipe.")
+            raise FileNotFoundError(f"Silakan unduh face_landmarker.tflite dari MediaPipe.")
             
         self.model_path = model_path
         self.use_gpu = use_gpu

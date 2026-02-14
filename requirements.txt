@@ -1,9 +1,6 @@
 # Core & Utilities
 yt-dlp>=2024.04.09
-pyyaml
 python-dotenv
-psutil
-colorama
 
 # AI & Computer Vision
 faster-whisper>=1.0.0

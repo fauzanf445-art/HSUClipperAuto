@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from pathlib import Path
 from functools import lru_cache
 from collections import deque
-import time
 
 @contextmanager
 def suppress_stderr():

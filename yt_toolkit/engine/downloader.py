@@ -6,15 +6,12 @@ from typing import Optional, List
 import shutil
 
 # Import utilitas umum
-from yt_toolkit.core.utils import extract_video_id, sanitize_filename, setup_paths, print_progress, get_common_ffmpeg_args
+from yt_toolkit.core.utils import extract_video_id, sanitize_filename, print_progress, get_common_ffmpeg_args
 
 try:
     import yt_dlp
 except ImportError as e:
     yt_dlp = None
-    _yt_dlp_error = e
-else:
-    _yt_dlp_error = None
 
 class QuietLogger:
     """Logger kustom untuk membungkam output standar yt-dlp di konsol,
@@ -147,7 +144,6 @@ class DownloadVidio:
 
         # Folder khusus untuk klip langsung
         direct_clips_dir = os.path.join(self.video_dir, 'raw_clips')
-        # Gunakan folder temp untuk memastikan kita menangkap file yang benar
         temp_dl_dir = os.path.join(direct_clips_dir, 'temp_dl')
         os.makedirs(direct_clips_dir, exist_ok=True)
         os.makedirs(temp_dl_dir, exist_ok=True)
